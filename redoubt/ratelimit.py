@@ -63,15 +63,13 @@ class CountRateLimiter(_SlidingWindowLimiter):
 
 ## Connection flood guard class (per-IP)
 
-## Connection flood guard class (per-IP)
-
 class ConnectionFloodGuard:
     """Per-IP session guard (to avoid malicious users to flood with sessions)"""
     def __init__(self, max_per_window: int, window_seconds: float, prune_threshold: int = 10_000, hard_cap: int = 10_000):
         self.max_per_window = max_per_window
         self.window_seconds = window_seconds
         self.prune_threshold = prune_threshold
-        self.hard_cap = hard_cap    # tetto reale, indipendente dallo stato idle/attivo
+        self.hard_cap = hard_cap
         self._by_ip: OrderedDict[str, CountRateLimiter] = OrderedDict()
         self._lock = threading.Lock()
 
@@ -85,13 +83,13 @@ class ConnectionFloodGuard:
                     self._prune_locked()
 
                 if len(self._by_ip) >= self.hard_cap:
-                    # tetto duro raggiunto: evict il più vecchio (LRU), a prescindere da idle o meno
+                    # evict LRU
                     self._by_ip.popitem(last=False)
 
                 limiter = CountRateLimiter(self.max_per_window, self.window_seconds)
                 self._by_ip[ip] = limiter
             else:
-                self._by_ip.move_to_end(ip)   # aggiorna recency per LRU
+                self._by_ip.move_to_end(ip)   # update recency for LRU
 
         return limiter.allow()
 

@@ -576,7 +576,7 @@ class RedoubtApp(App):
         text = event.value.strip()
         byte_len = len(text.encode("utf-8"))
         if byte_len > proto.MAX_MESSAGE_BYTES:  # if exceedes max bytes, warn and do not send
-            self.query_one("#statusbar", Static).update("⚠️ The message is too long. Divide into smaller messages")
+            self.query_one("#statusbar", Static).update("The message is too long. Divide into smaller messages")
             return
 
         # Get timestamp and random message ID

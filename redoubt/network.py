@@ -52,7 +52,7 @@ RTO_BACKOFF_CAP = 6 # max doubling exponent per pending message (2^6 = 64x RTO c
 ## Exceptions
 
 class PeerMismatch(Exception):
-    """Recieved fingerprint does not match expected one"""
+    """Received fingerprint does not match expected one"""
 
 
 ## Session class
