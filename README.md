@@ -1,6 +1,6 @@
 # Redoubt
 
-[![Version](https://img.shields.io/badge/version-1.0.0-green?style=flat)](https://github.com/FreyFlyy/Redoubt/releases/tag/v0.0.1)
+[![Version](https://img.shields.io/badge/version-0.0.1-green?style=flat)](https://github.com/FreyFlyy/Redoubt/releases/tag/v0.0.1)
 [![AUR](https://img.shields.io/badge/Arch-AUR-1793D1?style=flat&logo=arch-linux&logoColor=white)](#)
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?style=flat&logo=linux&logoColor=black)](https://kernel.org)
 
