@@ -6,9 +6,9 @@
 
 A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
 
-**Version:** V1. protects against passive network observers and **active MITM against contacts** already known (fingerprint exchanged out-of-band). **Does not** protect against theft of the identity key, nor against an attacker with access to the running process (see [Known limits](#what-v1-does-not-protect-against-by-design-not-by-oversight)).
+**Version V1**. Protects against passive network observers and **active MITM against contacts** already known (fingerprint exchanged out-of-band). **Does not** protect against theft of the identity key, nor against an attacker with access to the running process (see [Known limits](#what-v1-does-not-protect-against-by-design-not-by-oversight)).
 
-Internals — identity, wire protocol, message cryptography, storage, secure memory — are documented separately in [ARCHITECTURE.md](./ARCHITECTURE.md).
+Internals (identity, wire protocol, message cryptography, storage, secure memory) are documented separately in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
@@ -88,9 +88,9 @@ redoubt --list-contacts
 
 ## Main dependencies
 
-- `cryptography` — X25519, HKDF, AES-GCM, Argon2id
-- `sqlcipher3-binary` — file-level encrypted SQLite
-- `textual` — terminal interface
+- `cryptography`: X25519, HKDF, AES-GCM, Argon2id
+- `sqlcipher3-binary`: file-level encrypted SQLite
+- `textual`: terminal interface
 
 ## Operational requirements
 

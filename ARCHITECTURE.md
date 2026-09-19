@@ -39,13 +39,13 @@ Wire key, root key and chain key are derived with distinct HKDF/HMAC `info` labe
 - Permanent X25519 keypair per installation, generated on first run.
 - Fingerprint = SHA-256 of the raw public key, hex, 64 characters.
 - Private key encrypted at rest with a local **vault passphrase** (never transmitted over the network), derived via Argon2id (256 MiB, 3 iterations, 4 lanes).
-- The same vault key unlocks both the identity and the database (see [Storage](#storage)) — one secret to remember, two encrypted files (not two independent keys, see exception above).
+- The same vault key unlocks both the identity and the database (see [Storage](#storage)): one secret to remember, two encrypted files (not two independent keys, see exception above).
 
 ---
 
 ## Trust model (contacts)
 
-Adding a contact: name, IP, base64 pubkey, claimed fingerprint — automatic verification that `SHA-256(pubkey) == fingerprint` before saving, with an explicit manual confirmation from the terminal.
+Adding a contact: name, IP, base64 pubkey, claimed fingerprint. Automatic verification that `SHA-256(pubkey) == fingerprint` before saving, with an explicit manual confirmation from the terminal.
 
 There is no separate "verified/unverified" state per contact: a contact is either present in the list (added after a successful fingerprint verification) or absent. Connections, in both directions, require the peer to already be a saved contact:
 
