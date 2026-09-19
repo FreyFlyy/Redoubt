@@ -243,7 +243,7 @@ def recv_exact(sock, n, timeout=None):
 def read_packet(sock, wire_key: bytes):
     """Reads an opaque frame from the socket, decrypts it using the session wire key, and validates the resulting structure"""
     # receive length
-    raw_len = recv_exact(sock, 4)
+    raw_len = recv_exact(sock, 4, timeout=60)
     if raw_len is None: # no length
         return (None, None)
 

@@ -69,7 +69,7 @@ class ConnectionFloodGuard:
         self.max_per_window = max_per_window
         self.window_seconds = window_seconds
         self.prune_threshold = prune_threshold
-        self.hard_cap = hard_cap
+        self.hard_cap = hard_cap    # real cap, independent of idle/active state
         self._by_ip: OrderedDict[str, CountRateLimiter] = OrderedDict()
         self._lock = threading.Lock()
 
@@ -83,13 +83,13 @@ class ConnectionFloodGuard:
                     self._prune_locked()
 
                 if len(self._by_ip) >= self.hard_cap:
-                    # evict LRU
+                    # hard cap reached: evict the oldest (LRU), regardless of idle or not
                     self._by_ip.popitem(last=False)
 
                 limiter = CountRateLimiter(self.max_per_window, self.window_seconds)
                 self._by_ip[ip] = limiter
             else:
-                self._by_ip.move_to_end(ip)   # update recency for LRU
+                self._by_ip.move_to_end(ip)   # refresh recency for LRU
 
         return limiter.allow()
 

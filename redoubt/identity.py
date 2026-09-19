@@ -58,7 +58,7 @@ def create_identity(vault_passphrase: str) -> Identity:
     """Creates identity if no other identity is found. Takes a passphrase and generates Priv/Pub X25519 key pair"""
     _ensure_dir()
     # Generate private key
-    priv = crypto.generate_identity_keypair()
+    priv = crypto.generate_x25519_keypair()
     raw_priv = bytearray(crypto.private_key_to_raw(priv))
 
     salt = os.urandom(16)

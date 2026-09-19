@@ -4,126 +4,34 @@
 [![AUR](https://img.shields.io/badge/Arch-AUR-1793D1?style=flat&logo=arch-linux&logoColor=white)](#)
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?style=flat&logo=linux&logoColor=black)](https://kernel.org)
 
+Terminal-based P2P messenger, end-to-end encrypted, LAN/Tailscale. No server, no broker: two instances talk directly over TCP.
 
-A peer-to-peer messaging application with end-to-end message encryption and a hardened client runtime.
+**Version:** V1. protects against passive network observers and active MITM against contacts already known (fingerprint exchanged out-of-band). Does not protect against theft of the identity key, nor against an attacker with access to the running process (see [Known limits](#what-v1-does-not-protect-against-by-design-not-by-oversight)).
 
-**Redoubt** is designed to protect against both **passive** and **active man-in-the-middle (MITM) attackers** by mutually verifying each other's contacts. It does **not** protect against theft of the identity private key or compromise of the running process. See [Known Limitations](#known-limitations) and the roadmap.
-
-To communicate, users **must add each other to their contacts** and verify
-each other's fingerprints **out of band**. Unverified contacts cannot exchange messages.
+Internals — identity, wire protocol, message cryptography, storage, secure memory — are documented separately in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
-## What V1 Protects
+## Threat model
+
+### What V1 protects against
 
 | Threat | Protection |
 |---|---|
-| Passive network interception | Packet contents, packet type, sender information, and timestamps are encrypted at the wire layer |
-| Active MITM against a mutually verified contact | Authenticated wire key using a Noise-KK-style static-key handshake |
-| Offline theft of the encrypted database | Identity protected by an Argon2id-derived vault key; database encrypted with SQLCipher |
-| Offline theft of the encrypted identity key | Identity private key is encrypted at rest with the vault key |
-| Packet-type inspection | Packet type is encrypted inside the wire payload |
-| Packet-size analysis | Fixed-size padding to 4096 bytes |
-| Unauthorized contact impersonation | Mutual public-key fingerprint verification; unverified contacts cannot communicate |
-| Packet drop | ACK-based delivery confirmation and retransmission of the same encrypted packet |
+| Passive network observer (sniffing) | Opaque framing: every packet (type, sender, timestamp, content) is encrypted before touching the socket and padded to a fixed size |
+| Active attacker (MITM) against a contact already present in the local contact list | Authenticated wire key (Noise-KK-style scheme): requires the peer's static key, known in advance because the contact was added with an out-of-band fingerprint verification. A MITM without that private key cannot complete the handshake |
+| Theft of a powered-off device (disk, swap, hibernation) | Identity encrypted with a vault passphrase (Argon2id); entire database file encrypted (SQLCipher) + additional per-field encryption on sensitive content |
+| Packet-size analysis | Every packet is padded to a fixed 4096-byte block before encryption: type and real content length are not distinguishable from the size on the wire |
+| Compromised/suspicious contact | Explicit revocation (`--remove-contact`), requires proof of possession of the matching public key, not just the saved name |
 
----
+### What V1 does NOT protect against (by design, not by oversight)
 
-### V1 Security Boundaries
-
-Redoubt V1 does **not** currently provide:
-
-- Full post-compromise security
-- Protection against a compromised running process
-- Protection against theft of the identity private key
-- Traffic-timing obfuscation
-- Anonymity from network observers
-
-Network observers can still observe:
-
-- Source and destination IP addresses
-- Packet timing
-- Number of packets
-- Connection duration
-- Traffic volume
-
-Padding hides packet-size distinctions but does not provide traffic-analysis resistance.
-
-See [Known Limitations](#known-limitations) for the detailed limitations.
-
----
-
-## Known Limitations
-
-### 1. Identity key compromise
-
-V1 uses a permanent X25519 identity key.
-
-An attacker who obtains the private identity key can reconstruct the root key of recorded sessions because the message ratchet is ultimately derived from a static-static X25519 exchange.
-
-V1 therefore does **not** provide full forward secrecy against later compromise of the identity key.
-
-A persistent DH ratchet and X3DH-style session establishment are planned for V2.
-
-### 2. Runtime compromise
-
-An attacker with access to the running process may be able to access sensitive material in memory.
-
-V1 provides best-effort protections such as memory locking, explicit zeroization, and core-dump disabling, but these do not protect against a privileged attacker with live process access.
-
-### 3. Network metadata
-
-Redoubt does not hide all traffic metadata.
-
-An observer may still see:
-
-* Source and destination IP addresses
-* Number of packets
-* Packet timing
-* Connection duration
-* Traffic volume
-
-Padding hides packet-size distinctions but does not provide traffic-analysis or timing resistance.
-
-### 4. Compromised host
-
-An attacker with privileged access to a running system may bypass application-level protections.
-
-No application-level Python mechanism can guarantee protection against a fully compromised host.
-
----
-
-# Architecture
-
-```text
-┌─────────────────────────────────────────┐
-│ UI (Textual)                            │
-│ ui.py                                   │
-├─────────────────────────────────────────┤
-│ Application layer                       │
-│ Contacts, outbox, presence, retry/ACK   │
-│ network.py, app.py                      │
-├─────────────────────────────────────────┤
-│ Message layer                           │
-│ Symmetric ratchet, AES-256-GCM, AAD     │
-│ crypto.py, protocol.py                  │
-├─────────────────────────────────────────┤
-│ Wire layer                              │
-│ Encrypted framing, wire key, padding    │
-│ protocol.py, network.py                 │
-├─────────────────────────────────────────┤
-│ Transport                               │
-│ Raw TCP                                 │
-└─────────────────────────────────────────┘
-
-┌─────────────────────────────────────────┐
-│ Persistence                             │
-│ SQLCipher + field-level encryption      │
-│ storage.py                              │
-└─────────────────────────────────────────┘
-```
-
-Each cryptographic layer derives its own key material using separate HKDF `info` values for domain separation.
+- **Theft of the static identity key**: whoever obtains it can recompute the root key of any past session whose traffic was recorded. This requires a real Double Ratchet (X3DH + persistent DH ratchet) — **not implemented**, scope of V2.
+- **Runtime compromise of the process**: no self-healing/post-compromise security. On top of that, the vault key is not confined to the mlocked buffer alone: `Identity.vault_key` returns an ordinary `bytes` copy on every access, and `Storage` keeps a persistent copy of it for the entire lifetime of the process, never zeroed. `secure_memory.py` (mlock + zero) therefore only protects `Identity`'s internal buffer, not the copies that circulate elsewhere — this is a **best-effort** protection against offline forensics (powered-off disk, accidental core dumps), not against an attacker with access to the running process's RAM.
+- **Sender attribution in shared-IP scenarios (NAT/LAN)**: when several contacts are saved under the same IP, the inbound handshake tries multiple candidate static keys until one successfully decrypts the HELLO packet, but it does not verify that the fingerprint claimed in the payload matches the candidate that actually produced the winning wire key. A successfully authenticated contact (one that genuinely holds a known private key) can therefore claim to be a different contact sharing the same IP. Cryptographic authentication of the *real sender* still holds (nobody can forge a handshake without a known private key), but the session can end up associated with the wrong fingerprint, misrouting outgoing messages meant for that contact. Accepted risk in V1, to be fixed by binding the claimed fingerprint to the winning candidate.
+- **MITM against contacts not yet added**: if the sender's IP does not match any saved contact, the handshake always fails (no candidate key available) — this version has no "unauthenticated ephemeral wire key" fallback mode: reception from an unknown IP is rejected, not downgraded.
+- **Residual network metadata**: packet count, timing, and participants' IPs remain visible to a network observer. Padding hides size, not cadence.
+- **An attacker with access to the running process** (root, ptrace, cold-boot on powered RAM): no application-level defense is possible against this, in any version.
 
 ---
 
@@ -156,49 +64,45 @@ redoubt --show-card
 Add a contact:
 
 ```bash
-python -m redoubt.app --add-contact
+redoubt --add-contact
 ```
 
 Remove a contact:
 
 ```bash
-python -m redoubt.app --remove-contact
+redoubt --remove-contact
 ```
 
 List contacts:
 
 ```bash
-python -m redoubt.app --list-contacts
+redoubt --list-contacts
 ```
 
 ---
 
-# Roadmap
+## Roadmap
 
-## V2 - Post-Compromise Security
+- **V2**: full Double Ratchet (X3DH + persistent DH ratchet, self-healing/post-compromise security); binding the fingerprint claimed in the HELLO payload to the candidate that actually authenticated the wire key (closes the limit described in [Trust model](./ARCHITECTURE.md#trust-model-contacts)); optional Tor/onion support with contacts kept separate from LAN ones.
+- **V3**: critical components (memory, storage) rewritten in a memory-safe language with explicit control over key lifetime in RAM, to actually close the limit described in [Secure memory](./ARCHITECTURE.md#secure-memory) instead of just reducing its surface; timing obfuscation with dummy packets.
 
-Planned:
+---
 
-* X3DH-style session establishment
-* Full Double Ratchet
-* Tor transport (optional)
+## Main dependencies
 
-*(Tor contacts will use a separate identity/keypair from LAN contacts to avoid implicitly binding the two identities together.)*
+- `cryptography` — X25519, HKDF, AES-GCM, Argon2id
+- `sqlcipher3-binary` — file-level encrypted SQLite
+- `textual` — terminal interface
 
-## V3 - Native Security-Critical Components
+## Operational requirements
 
-Planned:
-
-* Rust implementation of security-critical memory handling
-* Rust implementation of security-critical storage components
-* FFI integration with the Python app
-* Traffic timing obfuscation with dummy traffic (optional)
+- Python ≥ 3.12
+- Strong vault passphrase (≥8 characters, the app warns if shorter, does not block, only warns)
+- **Out-of-band** fingerprint verification (in person or over a secure channel) before adding a contact: it is the only real trust anchor, no cryptography replaces it
 
 ## Author and Maintainer
 
 Francesco Scolz
-
-## Contacts
 - GitHub: [FreyFlyy](https://github.com/FreyFlyy)
 - LinkedIn: [Francesco Scolz](https://www.linkedin.com/in/francesco-scolz)
 - Hugging Face: [FreyFlyy](https://huggingface.co/FreyFlyy)

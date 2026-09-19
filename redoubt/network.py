@@ -52,7 +52,7 @@ RTO_BACKOFF_CAP = 6 # max doubling exponent per pending message (2^6 = 64x RTO c
 ## Exceptions
 
 class PeerMismatch(Exception):
-    """Received fingerprint does not match expected one"""
+    """Recieved fingerprint does not match expected one"""
 
 
 ## Session class
@@ -308,7 +308,7 @@ class NetworkManager:
             raise PeerMismatch("Cannot establish authenticated wire key: no peer PubKey available")
 
         # Generate and send ephemeral PubKey
-        eph_priv = crypto.generate_identity_keypair()
+        eph_priv = crypto.generate_x25519_keypair()
         eph_pub_raw = crypto.public_key_to_raw(eph_priv.public_key())
         sock.sendall(eph_pub_raw)
 
@@ -376,7 +376,7 @@ class NetworkManager:
             raise PeerMismatch("Cannot establish authenticated wire key: no peer PubKey available")
 
         # Generate ephemeral X25519 keypair
-        eph_priv = crypto.generate_identity_keypair()
+        eph_priv = crypto.generate_x25519_keypair()
         eph_pub_raw = crypto.public_key_to_raw(eph_priv.public_key())
 
         # Send raw PubKey

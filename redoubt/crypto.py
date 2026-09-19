@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 
 ## Identity
 
-def generate_identity_keypair() -> X25519PrivateKey:
+def generate_x25519_keypair() -> X25519PrivateKey:
     """Generate a Private Key"""
     return X25519PrivateKey.generate()
 
