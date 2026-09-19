@@ -1,12 +1,12 @@
 # Redoubt
 
-[![Version](https://img.shields.io/badge/version-1.0.0-green?style=flat)](https://github.com/FreyFlyy/Redoubt/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/badge/version-1.0.0-green?style=flat)](https://github.com/FreyFlyy/Redoubt/releases/tag/v0.0.1)
 [![AUR](https://img.shields.io/badge/Arch-AUR-1793D1?style=flat&logo=arch-linux&logoColor=white)](#)
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?style=flat&logo=linux&logoColor=black)](https://kernel.org)
 
 A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
 
-**Version V1**. Protects against passive network observers and **active MITM against contacts** already known (fingerprint exchanged out-of-band). **Does not** protect against theft of the identity key, nor against an attacker with access to the running process (see [Known limits](#what-v1-does-not-protect-against-by-design-not-by-oversight)).
+**Version V0.0.1 / V1**. Protects against passive network observers and **active MITM against contacts** already known (fingerprint exchanged out-of-band). **Does not** protect against theft of the identity key, nor against an attacker with access to the running process (see [Known limits](#what-v1-does-not-protect-against-by-design-not-by-oversight)).
 
 Internals (identity, wire protocol, message cryptography, storage, secure memory) are documented separately in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -14,7 +14,7 @@ Internals (identity, wire protocol, message cryptography, storage, secure memory
 
 ## Threat model
 
-### What V1 protects against
+### What V0.0.1 / V1 protects against
 
 | Threat | Protection |
 |---|---|
@@ -24,7 +24,7 @@ Internals (identity, wire protocol, message cryptography, storage, secure memory
 | Packet-size analysis | Every packet is padded to a fixed 4096-byte block before encryption: type and real content length are not distinguishable from the size on the wire |
 | Compromised/suspicious contact | Explicit revocation (`--remove-contact`), requires proof of possession of the matching public key, not just the saved name |
 
-### What V1 does NOT protect against (by design, not by oversight)
+### What V0.0.1 / V1 does NOT protect against (by design, not by oversight)
 
 - **Theft of the static identity key**: whoever obtains it can recompute the root key of any past session whose traffic was recorded. This requires a real Double Ratchet (X3DH + persistent DH ratchet)
 - **Runtime compromise of the process**: no self-healing/post-compromise security. On top of that, the vault key is not confined to the mlocked buffer alone: `Identity.vault_key` returns an ordinary `bytes` copy on every access, and `Storage` keeps a persistent copy of it for the entire lifetime of the process, never zeroed. `secure_memory.py` (mlock + zero) therefore only protects `Identity`'s internal buffer, not the copies that circulate elsewhere. This is a **best-effort** protection against offline forensics (powered-off disk, accidental core dumps), not against an attacker with access to the running process's RAM.
@@ -33,18 +33,96 @@ Internals (identity, wire protocol, message cryptography, storage, secure memory
 
 ---
 
-# How to start
+# How to start (Arch-Based distros)
 
-Install from AUR:
+Manual install:
 
-***NOTE: currently, the AUR is blocking all new registrations. No official redoubt package is available. Come back for updates***
+> **NOTE:** Currently, AUR is blocking all new registrations. No official Redoubt package is available (**v0.0.1 is experimental**). When new registrations reopen, the project will jump to **v1.0.0**. Come back for updates.
 
 ```bash
-# paru
-paru -S redoubt
+# Move into temp folder
+mkdir -p /tmp/redoubt
+cd /tmp/redoubt
 
+# Create PKGBUILD (copy and paste)
+cat > PKGBUILD <<'EOF'
+# Maintainer: Redoubt Developer francesco.scolz@gmail.com
+### MANUAL EXPERIMENTAL INSTALL, WAIT AUR PKG FOR v1.0.0
+
+pkgname=redoubt
+pkgver=0.0.1
+pkgrel=1
+pkgdesc="A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime"
+arch=('any')
+url="https://github.com/FreyFlyy/Redoubt"
+license=('AGPL-3.0-only')
+
+depends=(
+    'python'
+    'python-cryptography'
+    'python-sqlcipher3'
+    'python-textual'
+    'python-rich'
+)
+
+makedepends=(
+    'python-build'
+    'python-installer'
+    'python-setuptools'
+    'python-wheel'
+)
+
+source=(
+    "$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+)
+
+sha256sums=('362a15af611285f9a59fd223eaacb469a8c72c7eec32b947e5c940afaf6f6675')
+
+build() {
+    cd "$srcdir/Redoubt-$pkgver"
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd "$srcdir/Redoubt-$pkgver"
+    python -m installer --destdir="$pkgdir" dist/*.whl
+}
+EOF
+
+# Install depedencies
+
+# paru
+paru -S --needed \
+    python \
+    python-cryptography \
+    python-sqlcipher3 \
+    python-textual \
+    python-rich \
+    python-build \
+    python-installer \
+    python-setuptools \
+    python-wheel
 # yay
-yay -S redoubt
+yay -S --needed \
+    python \
+    python-cryptography \
+    python-sqlcipher3 \
+    python-textual \
+    python-rich \
+    python-build \
+    python-installer \
+    python-setuptools \
+    python-wheel
+
+# Make package
+makepkg
+
+# Install package
+sudo pacman -U redoubt-0.0.1-1-any.pkg.tar.zst
+
+# Remove temp files
+cd /tmp
+rm -rf /tmp/redoubt
 ```
 
 First start (will ask for a passphrase and will generate a local identity):
