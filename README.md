@@ -4,9 +4,9 @@
 [![AUR](https://img.shields.io/badge/Arch-AUR-1793D1?style=flat&logo=arch-linux&logoColor=white)](#)
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?style=flat&logo=linux&logoColor=black)](https://kernel.org)
 
-Terminal-based P2P messenger, end-to-end encrypted, LAN/Tailscale. No server, no broker: two instances talk directly over TCP.
+A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
 
-**Version:** V1. protects against passive network observers and active MITM against contacts already known (fingerprint exchanged out-of-band). Does not protect against theft of the identity key, nor against an attacker with access to the running process (see [Known limits](#what-v1-does-not-protect-against-by-design-not-by-oversight)).
+**Version:** V1. protects against passive network observers and **active MITM against contacts** already known (fingerprint exchanged out-of-band). **Does not** protect against theft of the identity key, nor against an attacker with access to the running process (see [Known limits](#what-v1-does-not-protect-against-by-design-not-by-oversight)).
 
 Internals — identity, wire protocol, message cryptography, storage, secure memory — are documented separately in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -26,10 +26,8 @@ Internals — identity, wire protocol, message cryptography, storage, secure mem
 
 ### What V1 does NOT protect against (by design, not by oversight)
 
-- **Theft of the static identity key**: whoever obtains it can recompute the root key of any past session whose traffic was recorded. This requires a real Double Ratchet (X3DH + persistent DH ratchet) — **not implemented**, scope of V2.
-- **Runtime compromise of the process**: no self-healing/post-compromise security. On top of that, the vault key is not confined to the mlocked buffer alone: `Identity.vault_key` returns an ordinary `bytes` copy on every access, and `Storage` keeps a persistent copy of it for the entire lifetime of the process, never zeroed. `secure_memory.py` (mlock + zero) therefore only protects `Identity`'s internal buffer, not the copies that circulate elsewhere — this is a **best-effort** protection against offline forensics (powered-off disk, accidental core dumps), not against an attacker with access to the running process's RAM.
-- **Sender attribution in shared-IP scenarios (NAT/LAN)**: when several contacts are saved under the same IP, the inbound handshake tries multiple candidate static keys until one successfully decrypts the HELLO packet, but it does not verify that the fingerprint claimed in the payload matches the candidate that actually produced the winning wire key. A successfully authenticated contact (one that genuinely holds a known private key) can therefore claim to be a different contact sharing the same IP. Cryptographic authentication of the *real sender* still holds (nobody can forge a handshake without a known private key), but the session can end up associated with the wrong fingerprint, misrouting outgoing messages meant for that contact. Accepted risk in V1, to be fixed by binding the claimed fingerprint to the winning candidate.
-- **MITM against contacts not yet added**: if the sender's IP does not match any saved contact, the handshake always fails (no candidate key available) — this version has no "unauthenticated ephemeral wire key" fallback mode: reception from an unknown IP is rejected, not downgraded.
+- **Theft of the static identity key**: whoever obtains it can recompute the root key of any past session whose traffic was recorded. This requires a real Double Ratchet (X3DH + persistent DH ratchet)
+- **Runtime compromise of the process**: no self-healing/post-compromise security. On top of that, the vault key is not confined to the mlocked buffer alone: `Identity.vault_key` returns an ordinary `bytes` copy on every access, and `Storage` keeps a persistent copy of it for the entire lifetime of the process, never zeroed. `secure_memory.py` (mlock + zero) therefore only protects `Identity`'s internal buffer, not the copies that circulate elsewhere. This is a **best-effort** protection against offline forensics (powered-off disk, accidental core dumps), not against an attacker with access to the running process's RAM.
 - **Residual network metadata**: packet count, timing, and participants' IPs remain visible to a network observer. Padding hides size, not cadence.
 - **An attacker with access to the running process** (root, ptrace, cold-boot on powered RAM): no application-level defense is possible against this, in any version.
 

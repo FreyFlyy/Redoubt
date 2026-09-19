@@ -302,13 +302,16 @@ class NetworkManager:
     def _establish_wire_key_candidates(self, sock, candidate_pubkeys_raw: list[bytes]):
         """
         Like _establish_wire_key, but it calculates a wire key for all possible contacts
-        (e.g. in the case of duplicated IPs with LANs).
+        (e.g. in the case of duplicated IPs with LANs). Returns (fingerprint, wire_key)
+        pairs: decrypting with one of these only proves someone KNOWN completed the
+        handshake, not WHICH known contact. Callers must bind the fingerprint that
+        actually wins to whatever identity the HELLO payload later claims.
         """
         if not candidate_pubkeys_raw:
             raise PeerMismatch("Cannot establish authenticated wire key: no peer PubKey available")
 
         # Generate and send ephemeral PubKey
-        eph_priv = crypto.generate_x25519_keypair()
+        eph_priv = crypto.generate_identity_keypair()
         eph_pub_raw = crypto.public_key_to_raw(eph_priv.public_key())
         sock.sendall(eph_pub_raw)
 
@@ -322,7 +325,7 @@ class NetworkManager:
         dh_ee = crypto.x25519_shared_secret(eph_priv, their_eph_pub)
         dh_se = crypto.x25519_shared_secret(self.identity.private_key, their_eph_pub)
 
-        wire_keys = []
+        candidates = []
         for cand_raw in candidate_pubkeys_raw:
             try:
                 peer_static_pub = crypto.public_key_from_raw(cand_raw)
@@ -332,12 +335,20 @@ class NetworkManager:
             # Compute last shared secret
             dh_es = crypto.x25519_shared_secret(eph_priv, peer_static_pub)
 
-            wire_keys.append(crypto.derive_wire_key(dh_ee, dh_es, dh_se))
+            wire_key = crypto.derive_wire_key(dh_ee, dh_es, dh_se)
+            candidates.append((crypto.fingerprint_of(cand_raw), wire_key))
 
-        return wire_keys
+        return candidates
 
-    def _read_packet_multi_key(self, sock, wire_keys: list[bytes]):
-        """Like proto.read_packet but tries more wire_key candidates on the same frame"""
+    def _read_packet_multi_key(self, sock, candidates: list[tuple[str, bytes]]):
+        """
+        Like proto.read_packet but tries more (fingerprint, wire_key) candidates on the
+        same frame. Returns (packet, wire_key, authenticated_fp): authenticated_fp is the
+        fingerprint of the SPECIFIC candidate whose static key produced the decrypting
+        wire key. This is the cryptographically proven identity of the sender — callers
+        MUST check it against whatever identity the packet itself later claims, never
+        trust the packet's own fields alone.
+        """
         raw_len = proto.recv_exact(sock, 4)
         if raw_len is None: # no lenght
             return None
@@ -354,14 +365,14 @@ class NetworkManager:
 
         nonce, ciphertext = raw[:proto.WIRE_NONCE_SIZE], raw[proto.WIRE_NONCE_SIZE:]
 
-        for wk in wire_keys:
+        for fp, wk in candidates:
             try:    # try decrypting with a candidate wire key
                 data = AESGCM(wk).decrypt(nonce, ciphertext, None)
                 packet = json.loads(data.decode("utf-8"))
                 proto.validate_packet(packet)
             except Exception:
                 continue  # wrong candidate, not an error, no logging
-            return packet, wk   # found
+            return packet, wk, fp   # found
 
         raise proto.InvalidPacket("No candidate key could decrypt HELLO (unknown sender or IP not recognized)")
 
@@ -376,7 +387,7 @@ class NetworkManager:
             raise PeerMismatch("Cannot establish authenticated wire key: no peer PubKey available")
 
         # Generate ephemeral X25519 keypair
-        eph_priv = crypto.generate_x25519_keypair()
+        eph_priv = crypto.generate_identity_keypair()
         eph_pub_raw = crypto.public_key_to_raw(eph_priv.public_key())
 
         # Send raw PubKey
@@ -472,20 +483,27 @@ class NetworkManager:
                 logger.exception(f"Stored public key for {addr[0]} is invalid")
 
         # Establish every possible candidate wire key
-        wire_keys = self._establish_wire_key_candidates(sock, candidate_pubkeys)
+        candidates = self._establish_wire_key_candidates(sock, candidate_pubkeys)
 
         sock.settimeout(HANDSHAKE_TIMEOUT)
         try:
-            result = self._read_packet_multi_key(sock, wire_keys)
+            result = self._read_packet_multi_key(sock, candidates)
         finally:
             sock.settimeout(None)
 
         if result is None:
             raise proto.InvalidPacket("Failed Handshake: HELLO missing")
-        hello, wire_key = result
+        hello, wire_key, authenticated_fp = result
 
         if hello["type"] != "HELLO":
             raise proto.InvalidPacket("Failed Handshake: peer did not HELLO")
+
+        # FP Cross-check (claimed vs "won" candidate)
+        if hello["fingerprint"] != authenticated_fp:
+            raise PeerMismatch(
+                f"HELLO claims fingerprint {hello['fingerprint'][:16]}... but the wire "
+                f"key was authenticated by {authenticated_fp[:16]}... — refusing"
+            )
 
         if self.storage.get_contact(hello["fingerprint"]) is None:
             raise PeerMismatch(f"Peer is not in the contact list: {hello['fingerprint'][:16]}...")
