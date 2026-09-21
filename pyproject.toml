@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "redoubt"
-version = "1.0.0"
+version = "0.0.1"
 description = "A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime"
 readme = "README.md"
 requires-python = ">=3.12"
