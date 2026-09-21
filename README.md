@@ -174,7 +174,7 @@ redoubt --list-contacts
 ## Operational requirements
 
 - Python ≥ 3.12
-- Strong vault passphrase (≥8 characters, the app warns if shorter, does not block, only warns)
+- Strong vault passphrase (≥8 characters)
 - **Out-of-band** fingerprint verification (in person or over a secure channel) before adding a contact: it is the only real trust anchor, no cryptography replaces it
 
 ## Author and Maintainer
