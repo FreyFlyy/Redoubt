@@ -270,3 +270,8 @@ class Storage:
         """Check for pending messages for a specific contact"""
         cur = self.conn.execute("SELECT COUNT(*) FROM outbox WHERE contact_fingerprint = ?", (contact_fingerprint,))
         return cur.fetchone()[0] > 0
+
+    def get_pending_ids(self, contact_fingerprint) -> set:
+        """Return the set of message IDs for a contact still awaiting an ACK (still present in outbox, no decryption needed)"""
+        cur = self.conn.execute("SELECT id FROM outbox WHERE contact_fingerprint = ?", (contact_fingerprint,))
+        return {row[0] for row in cur.fetchall()}

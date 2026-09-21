@@ -155,12 +155,13 @@ class Session:
 ## NetworkManager class
 
 class NetworkManager:
-    def __init__(self, identity, storage, on_message=None, on_status=None, on_statusbar_message=None):
+    def __init__(self, identity, storage, on_message=None, on_status=None, on_statusbar_message=None, on_ack=None):
         self.identity = identity
         self.storage = storage
         self.on_message = on_message or (lambda *a, **k: None)
         self.on_status = on_status or (lambda *a, **k: None)
         self.on_statusbar_message = on_statusbar_message or (lambda *a, **k: None)
+        self.on_ack = on_ack or (lambda *a, **k: None)
 
         self.sessions: dict[str, Session] = {}
         self.sessions_lock = threading.Lock()
@@ -790,6 +791,7 @@ class NetworkManager:
                 if entry is not None and entry["retries"] == 0:    # Karn: only sample RTT from sends that were never retransmitted (unambiguous timing)
                     session.update_rtt(time.time() - entry["sent_at"])
                 self.storage.delete_outbox(packet["id"])
+                self.on_ack(session.peer_fingerprint, packet["id"])
             elif packet["type"] == "CLOSE": # close session
                 if packet["sender"] != session.peer_fingerprint:    # corrupted or MITM
                     continue

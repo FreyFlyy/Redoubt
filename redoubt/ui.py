@@ -340,6 +340,7 @@ class RedoubtApp(App):
         network.on_message = self.on_message
         network.on_status = self.on_status
         network.on_statusbar_message = self.on_statusbar_message
+        network.on_ack = self.on_ack
 
     def compose(self) -> ComposeResult:
         """Compose full UI (sidebar, chat area, textbox and panels"""
@@ -536,6 +537,9 @@ class RedoubtApp(App):
         # Keep track of all already-rendered messages (identified by their IDs)
         rendered_ids = set()
 
+        # Outgoing messages still awaiting a MESSAGE_ACK (not yet confirmed received)
+        pending_ids = self.storage.get_pending_ids(fingerprint)
+
         for m in history:
             if m["id"] in rendered_ids:
                 continue
@@ -543,7 +547,10 @@ class RedoubtApp(App):
 
             ts = datetime.fromtimestamp(m["timestamp"] / 1000).strftime("%H:%M")
             if m["direction"] == "out": # show message as "You: ..."
-                log.write(f"[dim][{ts}][/] [bold {primary}]You:[/] {escape(m['text'])}")
+                if m["id"] in pending_ids:   # not yet ACKed: render dimmed
+                    log.write(f"[dim][{ts}] You: {escape(m['text'])}[/]")
+                else:
+                    log.write(f"[dim][{ts}][/] [bold {primary}]You:[/] {escape(m['text'])}")
             else:   # show message as "THEIR_NAME: ..."
                 name = self._items[fingerprint].contact_name
                 log.write(f"[dim][{ts}][/] [bold {secondary}]{name}[/]: {escape(m['text'])}")
@@ -664,6 +671,25 @@ class RedoubtApp(App):
 
         if item and status in ("online", "offline"):    # if item exists and in legal states
             item.set_status(status)
+
+    def on_ack(self, fingerprint, msg_id):
+        """Define callback for a network message ACK update"""
+        try:
+            self.call_from_thread(
+                self.on_ack_ui,
+                fingerprint,
+                msg_id
+            )
+        except RuntimeError:
+            logger.exception("RuntimeError: on_ack")
+
+    def on_ack_ui(self, fingerprint, msg_id):
+        """Define behaviour for a network message ACK update: un-dim the message if its chat is open"""
+        if not self.is_running:
+            return
+
+        if fingerprint == self.current_contact:   # only re-render if that chat is currently open
+            self.render_history(fingerprint)
 
     def on_statusbar_message(self, fingerprint, message):
         """Define callback for a network status message update"""
