@@ -77,7 +77,7 @@ source=(
     "$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
 )
 
-sha256sums=('4e7a9178b79e917788f0705230955217f9bd6cb9c4800fbf8e31b504c7b4007e')
+sha256sums=('9552773e993bbc37a2ead4d4e137a444727d25fa32c5052736cd8af7081ee866')
 
 build() {
     cd "$srcdir/Redoubt-$pkgver"
