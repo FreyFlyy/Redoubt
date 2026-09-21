@@ -547,8 +547,8 @@ class RedoubtApp(App):
 
             ts = datetime.fromtimestamp(m["timestamp"] / 1000).strftime("%H:%M")
             if m["direction"] == "out": # show message as "You: ..."
-                if m["id"] in pending_ids:   # not yet ACKed: render dimmed
-                    log.write(f"[dim][{ts}] You: {escape(m['text'])}[/]")
+                if m["id"] in pending_ids:   # not yet ACKed: render different
+                    log.write(f"[bold {secondary}][{ts}] You: {escape(m['text'])}[/]")
                 else:
                     log.write(f"[dim][{ts}][/] [bold {primary}]You:[/] {escape(m['text'])}")
             else:   # show message as "THEIR_NAME: ..."
