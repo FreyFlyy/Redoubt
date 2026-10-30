@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Redoubt
+Comment=Encrypted peer-to-peer messaging
+Exec=Redoubt
+Icon=redoubt
+Type=Application
+Terminal=true
+Categories=Network;InstantMessaging;Security;

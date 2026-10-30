@@ -1,0 +1,17 @@
+#!/bin/sh
+
+HERE="$(dirname "$(readlink -f "$0")")"
+APP="$HERE/usr/bin/Redoubt"
+
+if [ -t 0 ] && [ -t 1 ]; then
+    exec "$APP" "$@"
+fi
+
+for terminal in kitty konsole xfce4-terminal gnome-terminal alacritty foot xterm; do
+    if command -v "$terminal" >/dev/null 2>&1; then
+        exec "$terminal" -e "$APP" "$@"
+    fi
+done
+
+echo "Redoubt: nessun terminal emulator trovato." >&2
+exit 1

@@ -1,0 +1,4 @@
+cryptography>=44.0.0
+sqlcipher3>=0.6.0
+textual>=0.60.0
+rich>=13.0.0
