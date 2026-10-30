@@ -9,7 +9,7 @@ ARCH="${ARCH:-x86_64}"
 APPDIR="$ROOT/Redoubt.AppDir"
 VENV="$ROOT/.build-venv"
 
-# Verifica strumenti
+# Check tools
 for cmd in python appimagetool; do
     command -v "$cmd" >/dev/null || {
         echo "Missing dependency: $cmd"
@@ -17,7 +17,7 @@ for cmd in python appimagetool; do
     }
 done
 
-# Ambiente Python
+# Python env
 python -m venv "$VENV"
 . "$VENV/bin/activate"
 
