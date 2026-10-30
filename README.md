@@ -13,6 +13,8 @@
   </a>
 </p>
 
+![Screenshot](./Screenshot.png)
+
 **Redoubt** is a Linux peer-to-peer messaging application built around end-to-end encryption, authenticated peer communication and encrypted local storage.
 
 It is designed to minimize the information exposed to network observers and reduce the amount of sensitive data accessible through offline storage inspection.
