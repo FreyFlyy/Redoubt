@@ -1,6 +1,7 @@
 # Redoubt
 
 <p align="center">
+  <img src="https://img.shields.io/github/v/release/FreyFlyy/Redoubt?style=flat&color=green">
   <img src="https://img.shields.io/badge/platform-Linux-FCC624?style=flat&logo=linux&logoColor=black">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat&logo=python&logoColor=white">
   <img src="https://img.shields.io/github/license/FreyFlyy/Redoubt?style=flat">
@@ -436,3 +437,4 @@ For additional implementation details, see:
 Redoubt is distributed under the **GNU Affero General Public License v3.0 only (AGPL-3.0-only)**.
 
 See [LICENSE](./LICENSE) for the full license text.
+](https://img.shields.io/github/v/release/FreyFlyy/Redoubt?style=flat&label=version&color=7B2D8E)](https://img.shields.io/github/v/release/FreyFlyy/Redoubt?style=flat&label=version&color=7B2D8E)
