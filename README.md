@@ -99,17 +99,12 @@ Redoubt is distributed as a standalone AppImage for Linux.
 
 AppImages bundle the application and its Python dependencies, allowing Redoubt to run without manually installing Python packages or configuring a virtual environment.
 
-1. Download the latest AppImage from [./appimages](https://github.com/FreyFlyy/Redoubt/tree/main/appimages).
-2. Select the correct architecture:
-   - `x86_64` — 64-bit Intel/AMD.
-   - `aarch64` — 64-bit ARM.
-3. Make the file executable:
+1. Download the latest AppImage from [./appimages](https://github.com/FreyFlyy/Redoubt/tree/main/appimages) (NOTE: only x86_64 architecture is compiled, follow [Build from source](#building-from-source) for other systems).
+2. Make the file executable:
 
 ```bash
-chmod +x Redoubt-1.0.0-*.AppImage
+chmod +x Redoubt-1.0.1-*.AppImage
 ```
-
-**Supported architectures:** Linux x86_64 and Linux ARM64.
 
 **Note:** AppImage compatibility depends on the host system's architecture and available system libraries. Some distributions may require FUSE support.
 
@@ -129,8 +124,8 @@ mkdir -p ~/.local/share/applications
 Copy the AppImage matching your system architecture and the application icon into `~/.redoubt`:
 
 ```bash
-cp ./appimages/Redoubt-1.0.0-x86_64.AppImage ~/.redoubt/  # x86_64
-cp ./appimages/Redoubt-1.0.0-aarch64.AppImage ~/.redoubt/ # ARM64
+cp ./appimages/Redoubt-1.0.1-x86_64.AppImage ~/.redoubt/  # x86_64
+cp ./appimages/Redoubt-1.0.1-aarch64.AppImage ~/.redoubt/ # ARM64
 
 cp ./packaging/redoubt.png ~/.redoubt/
 ```
@@ -138,7 +133,7 @@ cp ./packaging/redoubt.png ~/.redoubt/
 #### 3. Make the AppImage executable
 
 ```bash
-chmod +x ~/.redoubt/Redoubt-1.0.0-*.AppImage
+chmod +x ~/.redoubt/Redoubt-1.0.1-*.AppImage
 ```
 
 #### 4. Install the desktop entry
@@ -153,11 +148,11 @@ Example for x86_64:
 
 ```ini
 [Desktop Entry]
-Version=1.0.0
+Version=1.0.1
 Type=Application
 Name=Redoubt
 Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
-Exec=/home/USERNAME/.redoubt/Redoubt-1.0.0-x86_64.AppImage
+Exec=/home/USERNAME/.redoubt/Redoubt-1.0.1-x86_64.AppImage
 Icon=/home/USERNAME/.redoubt/redoubt.png
 Terminal=true
 Categories=Network
@@ -168,11 +163,11 @@ Example for ARM64:
 
 ```ini
 [Desktop Entry]
-Version=1.0.0
+Version=1.0.1
 Type=Application
 Name=Redoubt
 Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
-Exec=/home/USERNAME/.redoubt/Redoubt-1.0.0-aarch64.AppImage
+Exec=/home/USERNAME/.redoubt/Redoubt-1.0.1-aarch64.AppImage
 Icon=/home/USERNAME/.redoubt/redoubt.png
 Terminal=true
 Categories=Network
@@ -271,22 +266,9 @@ python --version
 
 `appimagetool` is required to package the generated AppDir into an AppImage.
 
-Download the version matching the architecture of the build machine.
-
-**x86_64**
-
 ```bash
 sudo wget -O /usr/local/bin/appimagetool \
     https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-
-sudo chmod +x /usr/local/bin/appimagetool
-```
-
-**ARM64 / aarch64**
-
-```bash
-sudo wget -O /usr/local/bin/appimagetool \
-    https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
 
 sudo chmod +x /usr/local/bin/appimagetool
 ```
@@ -296,8 +278,6 @@ Verify the installed binary:
 ```bash
 file /usr/local/bin/appimagetool
 ```
-
-The reported architecture must match the build machine.
 
 If AppImage execution fails because FUSE is unavailable, install the appropriate FUSE compatibility package or use the AppImage extraction mode supported by the runtime.
 
@@ -344,7 +324,7 @@ The resulting AppImage is placed in `appimages/`.
 Launch Redoubt:
 
 ```bash
-./Redoubt-1.0.0-*.AppImage
+./Redoubt-1.0.1-*.AppImage
 ```
 
 On first launch, Redoubt will request a vault passphrase and initialize a local identity.
@@ -354,7 +334,7 @@ On first launch, Redoubt will request a vault passphrase and initialize a local 
 Display your identity card:
 
 ```bash
-./Redoubt-1.0.0-*.AppImage --show-card
+./Redoubt-1.0.1-*.AppImage --show-card
 ```
 
 Share your public identity information with the intended contact through an independent channel.
@@ -364,19 +344,19 @@ Share your public identity information with the intended contact through an inde
 Add a contact:
 
 ```bash
-./Redoubt-1.0.0-*.AppImage --add-contact
+./Redoubt-1.0.1-*.AppImage --add-contact
 ```
 
 List contacts:
 
 ```bash
-./Redoubt-1.0.0-*.AppImage --list-contacts
+./Redoubt-1.0.1-*.AppImage --list-contacts
 ```
 
 Remove a contact:
 
 ```bash
-./Redoubt-1.0.0-*.AppImage --remove-contact
+./Redoubt-1.0.1-*.AppImage --remove-contact
 ```
 
 **Important:** Verify contact fingerprints independently before establishing trust. Never assume that receiving a public key automatically authenticates its owner.
