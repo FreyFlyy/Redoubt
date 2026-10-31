@@ -1,0 +1,256 @@
+name: Release tests
+
+# Runs when a release is published (pre-releases included) or manually.
+# NOTE: a `release: published` trigger cannot block a release that is already public.
+# It tells you immediately if the published tag is broken. See "release-gate" at the bottom
+# if you want a required status check instead.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to test"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tests-${{ github.event.release.tag_name || inputs.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  REF: ${{ github.event.release.tag_name || inputs.ref }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Tag <-> package version consistency
+  # ---------------------------------------------------------------------------
+  version:
+    name: Version consistency
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compare tag, pyproject.toml and __version__
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os, re, sys, tomllib
+
+          pyproject = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          init = re.search(r'__version__\s*=\s*"([^"]+)"',
+                           open("redoubt/__init__.py", encoding="utf-8").read()).group(1)
+          print(f"pyproject.toml = {pyproject}\nredoubt/__init__.py = {init}")
+
+          errors = []
+          if pyproject != init:
+              errors.append("pyproject.toml and __init__.py versions differ")
+          if os.environ["EVENT_NAME"] == "release":
+              tag = os.environ["TAG"].removeprefix("v")
+              print(f"release tag = {tag}")
+              if tag != pyproject:
+                  errors.append(f"tag '{tag}' != package version '{pyproject}'")
+          if errors:
+              print("\n".join(f"::error::{e}" for e in errors))
+              sys.exit(1)
+          PY
+
+  # ---------------------------------------------------------------------------
+  # 2. Test suite on both architectures the project ships (x86_64 + aarch64)
+  # ---------------------------------------------------------------------------
+  test:
+    name: Tests (${{ matrix.runner }}, py${{ matrix.python }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: System libraries (SQLCipher fallback build)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3-dev libsqlcipher-dev libssl-dev libffi-dev
+
+      - name: Install package and test tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pytest pytest-cov
+
+      - name: Show crypto backend
+        run: |
+          python - <<'PY'
+          import cryptography
+          from cryptography.hazmat.backends.openssl.backend import backend
+          from sqlcipher3 import dbapi2 as s
+          print("cryptography", cryptography.__version__, "|", backend.openssl_version_text())
+          c = s.connect(":memory:"); c.execute("PRAGMA key='x'")
+          print("SQLCipher", c.execute("PRAGMA cipher_version").fetchone()[0])
+          PY
+
+      - name: Run tests
+        run: |
+          python -m pytest tests -v \
+            --cov=redoubt --cov-report=term-missing --cov-report=xml \
+            --cov-fail-under=55 \
+            --junitxml=junit.xml
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.runner }}-py${{ matrix.python }}
+          path: |
+            junit.xml
+            coverage.xml
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 3. Dependency vulnerabilities + static security analysis
+  # ---------------------------------------------------------------------------
+  security:
+    name: Security scans
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanners
+        run: pip install pip-audit bandit
+
+      - name: Known vulnerabilities in dependencies
+        run: pip-audit -r requirements.txt
+
+      # B104 (bind 0.0.0.0) is intentional: the P2P listener must accept LAN peers.
+      # Only medium+ severity findings fail the job.
+      - name: Static analysis (bandit)
+        run: bandit -r redoubt -ll --skip B104
+
+  # ---------------------------------------------------------------------------
+  # 4. Build the AppImage natively per arch and smoke-test the artifact
+  # ---------------------------------------------------------------------------
+  build-appimage:
+    name: AppImage (${{ matrix.arch }})
+    needs: [test, security]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"   # no FUSE on GitHub runners
+      ARCH: ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64,  runner: ubuntu-24.04,     file_match: "x86-64" }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, file_match: "aarch64" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-dev python3-venv build-essential libsqlcipher-dev libssl-dev libffi-dev \
+            squashfs-tools zsync wget desktop-file-utils file
+
+      # The "continuous" release is a moving target (same as in README). Pin a tag + checksum
+      # here if you want reproducible builds.
+      - name: Install appimagetool
+        run: |
+          sudo wget -q -O /usr/local/bin/appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage"
+          sudo chmod +x /usr/local/bin/appimagetool
+          file /usr/local/bin/appimagetool
+
+      - name: Build
+        run: ./packaging/build-appimage.sh
+
+      - name: Smoke test the built AppImage
+        env:
+          FILE_MATCH: ${{ matrix.file_match }}
+        run: |
+          VERSION=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          APPIMG="appimages/Redoubt-${VERSION}-${ARCH}.AppImage"
+          test -f "$APPIMG" || { echo "::error::expected $APPIMG not found"; ls -la appimages; exit 1; }
+          chmod +x "$APPIMG"
+
+          # Correct architecture
+          file "$APPIMG" | tee /dev/stderr | grep -qi "$FILE_MATCH"
+
+          # --help exercises the whole import chain (cryptography, sqlcipher3, textual) inside the bundle
+          export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
+          "$APPIMG" --help | tee help.txt
+          grep -q -- "--show-card" help.txt
+
+          sha256sum "$APPIMG" | tee SHA256SUMS
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-${{ matrix.arch }}
+          path: |
+            appimages/Redoubt-*-${{ matrix.arch }}.AppImage
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 5. Single status to use in branch protection / required checks
+  # ---------------------------------------------------------------------------
+  release-gate:
+    name: Release gate
+    if: always()
+    needs: [version, test, security, build-appimage]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail if any required job did not succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = "success" ] || { echo "::error::a required job finished as '$r'"; exit 1; }
+          done

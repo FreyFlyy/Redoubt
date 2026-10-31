@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -23,6 +22,10 @@ python -m venv "$VENV"
 
 python -m pip install --upgrade pip
 python -m pip install -e . pyinstaller
+
+# Single source of truth for the version: pyproject.toml (override with VERSION=... if needed)
+VERSION="${VERSION:-$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')}"
+echo "Building Redoubt $VERSION ($ARCH)"
 
 # PyInstaller
 rm -rf build dist "$APPDIR"
