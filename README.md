@@ -99,7 +99,7 @@ Redoubt is distributed as a standalone AppImage for Linux.
 
 AppImages bundle the application and its Python dependencies, allowing Redoubt to run without manually installing Python packages or configuring a virtual environment.
 
-1. Download the latest AppImage from [./appimages](https://github.com/FreyFlyy/Redoubt/tree/main/appimages) (NOTE: only x86_64 architecture is compiled, follow [Build from source](#building-from-source) for other systems).
+1. Download the latest AppImage from [./appimages](https://github.com/FreyFlyy/Redoubt/tree/main/appimages) (NOTE: only x86_64 architecture is compiled, follow [Building from source](#building-from-source) for other systems).
 2. Make the file executable:
 
 ```bash
@@ -125,7 +125,6 @@ Copy the AppImage matching your system architecture and the application icon int
 
 ```bash
 cp ./appimages/Redoubt-1.0.1-x86_64.AppImage ~/.redoubt/  # x86_64
-cp ./appimages/Redoubt-1.0.1-aarch64.AppImage ~/.redoubt/ # ARM64
 
 cp ./packaging/redoubt.png ~/.redoubt/
 ```
@@ -153,21 +152,6 @@ Type=Application
 Name=Redoubt
 Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
 Exec=/home/USERNAME/.redoubt/Redoubt-1.0.1-x86_64.AppImage
-Icon=/home/USERNAME/.redoubt/redoubt.png
-Terminal=true
-Categories=Network
-StartupNotify=false
-```
-
-Example for ARM64:
-
-```ini
-[Desktop Entry]
-Version=1.0.1
-Type=Application
-Name=Redoubt
-Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
-Exec=/home/USERNAME/.redoubt/Redoubt-1.0.1-aarch64.AppImage
 Icon=/home/USERNAME/.redoubt/redoubt.png
 Terminal=true
 Categories=Network
@@ -419,4 +403,3 @@ For additional implementation details, see:
 Redoubt is distributed under the **GNU Affero General Public License v3.0 only (AGPL-3.0-only)**.
 
 See [LICENSE](./LICENSE) for the full license text.
-](https://img.shields.io/github/v/release/FreyFlyy/Redoubt?style=flat&label=version&color=7B2D8E)](https://img.shields.io/github/v/release/FreyFlyy/Redoubt?style=flat&label=version&color=7B2D8E)
