@@ -1,11 +1,15 @@
-### app.py
-
 """
 Entry point CLI of Redoubt
 """
 
+import sys
 import time
 import argparse
+import ipaddress
+
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
+
+from . import __version__
 from . import crypto
 from . import secure_memory
 from . import identity as identity_mod
@@ -21,30 +25,58 @@ def format_fingerprint(fp: str) -> str:
     """Format sha256 fingerprint into 4-char spaced blocks"""
     return " ".join(fp[i:i + 4] for i in range(0, len(fp), 4))
 
+def normalize_fingerprint(s: str) -> str:
+    """Remove every whitespace character and lowercase (fingerprints are lowercase hex)"""
+    return "".join(s.split()).lower()
+
 def cmd_show_card(ident):
     """Show personal identity card: PubKey and fingerprint (=sha256 of the PubKey)"""
     print("\n=== Identity card (Share out-of-band only or on a secure channel) ===")
     print(f"Fingerprint : {format_fingerprint(ident.fingerprint)}")
-    print(f"Public key : {protocol_mod.b64(ident.public_key_raw)}")
+    print(f"Public key  : {protocol_mod.b64(ident.public_key_raw)}")
     print("Verify the fingerprint with the contact BEFORE messaging.\n")
 
-def cmd_add_contact(storage):
+def cmd_add_contact(storage, ident):
     """Add contacts out-of-band (Name, IP, PubKey and Fingerprint)"""
     print("\n=== Add contact (manual entry) ===")
     name = input("Name (only visible by you): ").strip()
-    ip = input("IP: ").strip()
+    ip_input = input("IP: ").strip()
     pubkey_b64 = input("Public key (base64): ").strip()
-    fingerprint_input = input("Fingerprint (with or without spaces): ").strip().replace(" ", "")
+    fingerprint_input = normalize_fingerprint(input("Fingerprint (with or without spaces): "))
+
+    if not name:
+        print("[ERROR] Name cannot be empty. Contact was not added.")
+        return
+
+    try:
+        addr = ipaddress.ip_address(ip_input)
+        if addr.is_unspecified or addr.is_multicast:
+            raise ValueError
+        ip = str(addr)  # canonical form, so it matches the source IP seen by the listener
+    except ValueError:
+        print("[ERROR] Not a valid peer IP address. Contact was not added.")
+        return
 
     try:
         pubkey_raw = protocol_mod.unb64(pubkey_b64)
+        if len(pubkey_raw) != 32:
+            raise ValueError("wrong length")
+        X25519PublicKey.from_public_bytes(pubkey_raw)
     except Exception:
-        print("[ERROR] Public key is not a valid base64. Contact was not added.")
+        print("[ERROR] Public key is not a valid X25519 key (base64 of 32 bytes). Contact was not added.")
         return
 
     computed_fp = crypto.fingerprint_of(pubkey_raw)
     if computed_fp != fingerprint_input:
         print("[ERROR] Fingerprint does not match Public key. Contact was not added. always share on a secure out-of-band channel.")
+        return
+
+    if computed_fp == ident.fingerprint:
+        print("[ERROR] This is your own identity. Contact was not added.")
+        return
+
+    if storage.get_contact(computed_fp) is not None:
+        print("[ERROR] A contact with this fingerprint already exists. Contact was not added.")
         return
 
     confirm = input("Fingerprint matches Public Key. Add contact? (yes/no): ").strip().lower()
@@ -71,9 +103,14 @@ def cmd_list_contacts(storage):
     print()
 
 def cmd_remove_contact(storage):
-    """Remove contact from storage"""
+    """Remove contact from storage.
+
+    NOTE: the public key is requested as an anti-mistake confirmation, not as a security
+    check (a public key is not a secret). Sessions already open in a running instance are
+    not affected until it is restarted.
+    """
     print("\n=== Remove contact (will eliminate all chat history and revoke trust. Will need to add them back to message again) ===")
-    fingerprint_input = input("Fingerprint of the contact to remove: ").strip().replace(" ", "")
+    fingerprint_input = normalize_fingerprint(input("Fingerprint of the contact to remove: "))
 
     contact = storage.get_contact(fingerprint_input)
     if contact is None:
@@ -107,51 +144,72 @@ def cmd_remove_contact(storage):
 
 ## Main function
 
-def main():
+def _run() -> int:
     secure_memory.disable_core_dumps()  # Avoid information-leaking dumps
 
     parser = argparse.ArgumentParser(description="A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime")
-    parser.add_argument("--show-card", action="store_true", help="show personal identity card")
-    parser.add_argument("--add-contact", action="store_true", help="add contact to trusted list")
-    parser.add_argument("--remove-contact", action="store_true", help="remove contact from trusted list")
-    parser.add_argument("--list-contacts", action="store_true", help="list contacts from trusted list")
+    # --version exits inside parse_args(), before the vault passphrase is requested
+    parser.add_argument("--version", action="version", version=f"redoubt {__version__}", help="show app version and exit")
+    commands = parser.add_mutually_exclusive_group()
+    commands.add_argument("--show-card", action="store_true", help="show personal identity card")
+    commands.add_argument("--add-contact", action="store_true", help="add contact to trusted list")
+    commands.add_argument("--remove-contact", action="store_true", help="remove contact from trusted list")
+    commands.add_argument("--list-contacts", action="store_true", help="list contacts from trusted list")
     args = parser.parse_args()
 
     ident = identity_mod.load_or_create_identity_interactive()
-    storage = storage_mod.Storage(ident.vault_key)
+    network = None
+    network_running = False
 
-    if args.show_card:
-        cmd_show_card(ident)
-        return
-
-    if args.add_contact:
-        cmd_add_contact(storage)
-        return
-
-    if args.remove_contact:
-        cmd_remove_contact(storage)
-        return
-
-    if args.list_contacts:
-        cmd_list_contacts(storage)
-        return
-
-    network = network_mod.NetworkManager(ident, storage)
-    network.start_listener(port=network_mod.DEFAULT_PORT)
-    network.start_presence_worker()
-    network.start_ack_watchdog()
-    print("Starting...")
-
-    app = RedoubtApp(ident, storage, network)
     try:
+        storage = storage_mod.Storage(ident.vault_key)
+
+        if args.show_card:
+            cmd_show_card(ident)
+            return 0
+
+        if args.add_contact:
+            cmd_add_contact(storage, ident)
+            return 0
+
+        if args.remove_contact:
+            cmd_remove_contact(storage)
+            return 0
+
+        if args.list_contacts:
+            cmd_list_contacts(storage)
+            return 0
+
+        network = network_mod.NetworkManager(ident, storage)
+        try:
+            network.start_listener(port=network_mod.DEFAULT_PORT)
+        except OSError as e:
+            print(f"[ERROR] Cannot listen on port {network_mod.DEFAULT_PORT}: {e}")
+            return 1
+        network_running = True
+        network.start_presence_worker()
+        network.start_ack_watchdog()
+        print("Starting...")
+
+        app = RedoubtApp(ident, storage, network)
         app.run()
-    finally:    # at quit
-        network.broadcast_presence("offline")
-        time.sleep(0.5)
-        network.stop()
+        return 0
+    finally:    # at quit, on errors and after CLI commands
+        if network_running:
+            network.broadcast_presence("offline")
+            time.sleep(0.5)
+            network.stop()
         ident.wipe()
         print("Closing...")
 
 
+def main() -> int:
+    try:
+        return _run()
+    except (KeyboardInterrupt, EOFError):
+        print("\nAborted.")
+        return 130
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

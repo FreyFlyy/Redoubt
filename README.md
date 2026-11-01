@@ -93,6 +93,11 @@ For the complete analysis, consult [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Installation
 
+> ⚠️ **Experimental and unaudited.** Redoubt uses a custom protocol and a
+> hand-assembled cryptographic design that no third party has reviewed.
+> Do not use it for data whose exposure would cause harm.
+> Known limits: [Security model](#security-model) · Report a vulnerability: [SECURITY.md](./SECURITY.md)
+
 ### AppImage
 
 Redoubt is distributed as a standalone AppImage for Linux.

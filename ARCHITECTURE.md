@@ -94,7 +94,7 @@ When more than one static key is tried as a candidate (shared-IP case), a succes
 
 ## Storage
 
-SQLite via SQLCipher (`sqlcipher3-binary`): the entire `.db` file (schema, indexes, WAL included) is AES ciphertext until the vault key is supplied (`PRAGMA key` in `Storage.__init__`, explicitly verified with a check query before proceeding). On top of that, per-field encryption (`crypto.vault_encrypt`) on sensitive content (contact name/IP/pubkey, message text).
+SQLite via SQLCipher: the entire `.db` file (schema, indexes, WAL included) is AES ciphertext until the vault key is supplied (`PRAGMA key` in `Storage.__init__`, explicitly verified with a check query before proceeding). On top of that, per-field encryption (`crypto.vault_encrypt`) on sensitive content (contact name/IP/pubkey, message text).
 
 Columns that stay in plaintext **inside** the unlocked database (fingerprint, timestamp, direction, unread): needed for SQLite indexing/querying without decrypting every row. Not an external-facing weakness, the file is still encrypted at the SQLCipher level.
 
@@ -130,4 +130,4 @@ Sliding window, two distinct uses:
 
 `secure_memory.py`: best-effort mlock() + explicit zeroization for the vault key (`Identity`'s internal buffer) and chain keys, via `SecureBuffer`. Core dumps disabled (`RLIMIT_CORE=0`) as the very first instruction in `main()`.
 
-**Stated limit**: the protection only covers `Identity`'s internal buffer. Every consumer that needs the plaintext key (chiefly `Storage`, for every row encrypt/decrypt) receives and retains an ordinary `bytes` copy, not mlocked and never zeroed, for the entire lifetime of the process. `secure_memory.py` therefore only reduces the exposure window of the "master" copy, it does not eliminate plaintext copies living in ordinary RAM. It protects against offline forensics (stolen powered-off disk, accidental core dumps), not against an attacker with access to the running process. See the [README](./README.md#what-v1-does-not-protect-against-by-design-not-by-oversight) for the same limit stated as a threat-model item.
+**Stated limit**: the protection only covers `Identity`'s internal buffer. Every consumer that needs the plaintext key (chiefly `Storage`, for every row encrypt/decrypt) receives and retains an ordinary `bytes` copy, not mlocked and never zeroed, for the entire lifetime of the process. `secure_memory.py` therefore only reduces the exposure window of the "master" copy, it does not eliminate plaintext copies living in ordinary RAM. It protects against offline forensics (stolen powered-off disk, accidental core dumps), not against an attacker with access to the running process. See the [README](./README.md#known-limitations) for the same limit stated as a threat-model item.
