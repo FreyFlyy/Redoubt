@@ -8,7 +8,7 @@ For what the project does and does not protect against, read the [Security model
 
 ## Supported versions
 
-Only the latest release receives security fixes (currently v1.0.1)
+Only the latest release receives security fixes (currently v2.0.0)
 
 ---
 
@@ -63,7 +63,6 @@ If you do not receive an acknowledgement within 7 days, please resend.
 These are documented limitations of the current version, not vulnerabilities:
 
 - Attacker with access to the running process, root, ptrace or cold-boot on powered RAM
-- Lack of post-compromise security and of per-message forward secrecy (planned for V2)
 - Network metadata: IP addresses, timing, packet counts
 - Plaintext copies of the vault key in ordinary process memory (see [Secure memory](./ARCHITECTURE.md#secure-memory))
 - Reuse of the vault key for `identity.enc` and the SQLCipher database (documented in ARCHITECTURE.md)
@@ -99,10 +98,6 @@ Do not test against other people's Redoubt instances without their explicit cons
 
 ## Verifying releases
 
-Release artifacts are published on the [Releases page](https://github.com/FreyFlyy/Redoubt/releases) together with a `SHA256SUMS` file. Verify before running:
-
-```bash
-sha256sum -c SHA256SUMS
-```
+Release artifacts are published on the [Releases page](https://github.com/FreyFlyy/Redoubt/releases)
 
 Only trust AppImages downloaded from this repository's official releases.

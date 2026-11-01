@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/FreyFlyy/Redoubt/tree/main/appimages">
+  <a href="https://github.com/FreyFlyy/Redoubt/releases/latest">
     <img src="https://img.shields.io/badge/Download-AppImage-7B2D8E?style=for-the-badge&logo=linux&logoColor=white" alt="Download AppImage">
   </a>
 </p>
@@ -45,6 +45,7 @@ Redoubt separates its functionality into independent modules:
 |---|---|
 | `app.py` | Application entry point and orchestration |
 | `crypto.py` | Cryptographic primitives and key derivation |
+| `ratchet.py` | Double Ratchet: session key derivation and forward-secure message keys |
 | `identity.py` | Local identity and vault management |
 | `network.py` | Peer-to-peer networking |
 | `protocol.py` | Communication protocol and packet handling |
@@ -78,7 +79,6 @@ Redoubt focuses on protecting communications and locally stored information agai
 
 Redoubt does not currently provide all the security properties of mature messaging protocols.
 
-- **No Double Ratchet:** The current key exchange does not provide full forward secrecy or post-compromise security. Theft of a static identity key can compromise previously recorded session traffic.
 - **Runtime compromise:** An attacker with access to the running process can potentially access sensitive information in memory.
 - **Memory management:** Memory locking and zeroization are best-effort measures. Python objects and copies of sensitive keys can exist outside protected buffers.
 - **Network metadata:** IP addresses, communication timing, packet counts and communication patterns remain observable.
@@ -108,7 +108,7 @@ AppImages bundle the application and its Python dependencies, allowing Redoubt t
 2. Make the file executable:
 
 ```bash
-chmod +x Redoubt-1.0.1-*.AppImage
+chmod +x Redoubt-2.0.0-*.AppImage
 ```
 
 **Note:** AppImage compatibility depends on the host system's architecture and available system libraries. Some distributions may require FUSE support.
@@ -129,7 +129,7 @@ mkdir -p ~/.local/share/applications
 Copy the AppImage matching your system architecture and the application icon into `~/.redoubt`:
 
 ```bash
-cp ./appimages/Redoubt-1.0.1-x86_64.AppImage ~/.redoubt/  # x86_64
+cp Redoubt-2.0.0-x86_64.AppImage ~/.redoubt/  # x86_64
 
 cp ./packaging/redoubt.png ~/.redoubt/
 ```
@@ -137,7 +137,7 @@ cp ./packaging/redoubt.png ~/.redoubt/
 #### 3. Make the AppImage executable
 
 ```bash
-chmod +x ~/.redoubt/Redoubt-1.0.1-*.AppImage
+chmod +x ~/.redoubt/Redoubt-2.0.0-*.AppImage
 ```
 
 #### 4. Install the desktop entry
@@ -152,11 +152,11 @@ Example for x86_64:
 
 ```ini
 [Desktop Entry]
-Version=1.0.1
+Version=2.0.0
 Type=Application
 Name=Redoubt
 Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
-Exec=/home/USERNAME/.redoubt/Redoubt-1.0.1-x86_64.AppImage
+Exec=/home/USERNAME/.redoubt/Redoubt-2.0.0-x86_64.AppImage
 Icon=/home/USERNAME/.redoubt/redoubt.png
 Terminal=true
 Categories=Network
@@ -302,7 +302,7 @@ The build script automatically:
 5. Creates the AppDir structure.
 6. Packages the application using `appimagetool`.
 
-The resulting AppImage is placed in `appimages/`.
+The resulting AppImage is placed in `/`.
 
 **Important:** Build each architecture natively on a machine with the corresponding architecture. Building on x86_64 does not automatically produce an ARM64 executable, and vice versa.
 
@@ -313,7 +313,7 @@ The resulting AppImage is placed in `appimages/`.
 Launch Redoubt:
 
 ```bash
-./Redoubt-1.0.1-*.AppImage
+./Redoubt-2.0.0-*.AppImage
 ```
 
 On first launch, Redoubt will request a vault passphrase and initialize a local identity.
@@ -323,7 +323,7 @@ On first launch, Redoubt will request a vault passphrase and initialize a local 
 Display your identity card:
 
 ```bash
-./Redoubt-1.0.1-*.AppImage --show-card
+./Redoubt-2.0.0-*.AppImage --show-card
 ```
 
 Share your public identity information with the intended contact through an independent channel.
@@ -333,19 +333,19 @@ Share your public identity information with the intended contact through an inde
 Add a contact:
 
 ```bash
-./Redoubt-1.0.1-*.AppImage --add-contact
+./Redoubt-2.0.0-*.AppImage --add-contact
 ```
 
 List contacts:
 
 ```bash
-./Redoubt-1.0.1-*.AppImage --list-contacts
+./Redoubt-2.0.0-*.AppImage --list-contacts
 ```
 
 Remove a contact:
 
 ```bash
-./Redoubt-1.0.1-*.AppImage --remove-contact
+./Redoubt-2.0.0-*.AppImage --remove-contact
 ```
 
 **Important:** Verify contact fingerprints independently before establishing trust. Never assume that receiving a public key automatically authenticates its owner.
@@ -354,17 +354,12 @@ Remove a contact:
 
 ## Roadmap
 
-### V2 — Cryptographic improvements
+### V2.1.0 — Tor/onion net
 
-- Full Double Ratchet implementation.
-- X3DH-based initial key agreement.
-- Persistent Diffie-Hellman ratcheting.
-- Forward secrecy and post-compromise security.
-- Stronger binding between advertised identity fingerprints and authenticated wire keys.
 - Optional Tor/onion networking.
 - Separation of LAN and onion contacts.
 
-### V3 — Systems-level improvements
+### V3.0.0 or more — System-level improvements
 
 - Rewrite security-critical components in a memory-safe language.
 - More explicit control over cryptographic key lifetimes.

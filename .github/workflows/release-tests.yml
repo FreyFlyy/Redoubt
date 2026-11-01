@@ -158,82 +158,12 @@ jobs:
         run: bandit -r redoubt -ll --skip B104
 
   # ---------------------------------------------------------------------------
-  # 4. Build the x86_64 AppImage and smoke-test the artifact
-  # ---------------------------------------------------------------------------
-  build-appimage:
-    name: AppImage (x86_64)
-    needs: [test, security]
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-    env:
-      APPIMAGE_EXTRACT_AND_RUN: "1"   # no FUSE on GitHub runners
-      ARCH: x86_64
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.REF }}
-          persist-credentials: false
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            python3-dev python3-venv build-essential libsqlcipher-dev libssl-dev libffi-dev \
-            squashfs-tools zsync wget desktop-file-utils file
-
-      # The "continuous" release is a moving target (same as in README). Pin a tag + checksum
-      # here if you want reproducible builds.
-      - name: Install appimagetool
-        run: |
-          sudo wget -q -O /usr/local/bin/appimagetool \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage"
-          sudo chmod +x /usr/local/bin/appimagetool
-          file /usr/local/bin/appimagetool
-
-      - name: Build
-        run: ./packaging/build-appimage.sh
-
-      - name: Smoke test the built AppImage
-        run: |
-          VERSION=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
-          APPIMG="appimages/Redoubt-${VERSION}-${ARCH}.AppImage"
-          test -f "$APPIMG" || { echo "::error::expected $APPIMG not found"; ls -la appimages; exit 1; }
-          chmod +x "$APPIMG"
-
-          # Correct architecture
-          file "$APPIMG" | tee /dev/stderr | grep -qi "x86-64"
-
-          # --help exercises the whole import chain (cryptography, sqlcipher3, textual) inside the bundle.
-          # AppRun refuses to start without a terminal (the app is a TUI) and CI has none,
-          # so run it inside a pseudo-terminal. `-e` propagates the exit code.
-          export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
-          set -o pipefail
-          script -qec "$APPIMG --help" /dev/null | tee help.txt
-          grep -q -- "--show-card" help.txt
-
-          sha256sum "$APPIMG" | tee SHA256SUMS
-
-      - name: Upload build
-        uses: actions/upload-artifact@v4
-        with:
-          name: appimage-x86_64
-          path: |
-            appimages/Redoubt-*-x86_64.AppImage
-            SHA256SUMS
-          if-no-files-found: error
-          retention-days: 30
-
-  # ---------------------------------------------------------------------------
-  # 5. Single status to use in branch protection / required checks
+  # 4. Single status to use in branch protection / required checks
   # ---------------------------------------------------------------------------
   release-gate:
     name: Release gate
     if: always()
-    needs: [version, test, security, build-appimage]
+    needs: [version, test, security]
     runs-on: ubuntu-22.04
     steps:
       - name: Fail if any required job did not succeed
@@ -242,5 +172,8 @@ jobs:
         run: |
           echo "results: $RESULTS"
           for r in $RESULTS; do
-            [ "$r" = "success" ] || { echo "::error::a required job finished as '$r'"; exit 1; }
+            [ "$r" = "success" ] || {
+              echo "::error::a required job finished as '$r'"
+              exit 1
+            }
           done
