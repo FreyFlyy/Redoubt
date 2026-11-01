@@ -110,3 +110,44 @@ def test_message_aead_roundtrip_and_aad_binding():
         crypto.decrypt_message(mk, nonce, ct, b"MESSAGE|id|sender|1|1")  # header changed
     with pytest.raises(InvalidTag):
         crypto.decrypt_message(os.urandom(32), nonce, ct, aad)
+
+
+def test_root_key_depends_on_the_key_material():
+    n1, n2 = os.urandom(16), os.urandom(16)
+    ikm = os.urandom(96)
+    base = crypto.derive_root_key(ikm, n1, n2)
+    assert len(base) == 32
+    flipped = bytearray(ikm); flipped[95] ^= 1
+    assert base != crypto.derive_root_key(bytes(flipped), n1, n2)       # every ephemeral/static DH term matters
+    assert base == crypto.derive_root_key(ikm, n1, n2)
+
+
+def test_root_key_and_wire_key_are_domain_separated():
+    """Same DH material feeds both KDFs; knowing the wire key must not give the root key (and vice versa)"""
+    dh_ee, t1, t2 = os.urandom(32), os.urandom(32), os.urandom(32)
+    n1, n2 = os.urandom(16), os.urandom(16)
+    assert crypto.derive_wire_key(dh_ee, t1, t2) != crypto.derive_root_key(dh_ee + t1 + t2, n1, n2)
+
+
+def test_ratchet_step_outputs_are_independent_of_the_other_branch():
+    """message key = HMAC(ck, c1), next chain key = HMAC(ck, c2): different constants -> unrelated outputs"""
+    import hashlib, hmac
+    ck = os.urandom(32)
+    mk, nxt = crypto.ratchet_step(bytearray(ck))
+    assert mk == hmac.new(ck, b"YOU CANNOT SPY US", hashlib.sha256).digest()
+    assert bytes(nxt) == hmac.new(ck, b"WE DEMAND PRIVACY", hashlib.sha256).digest()
+    assert mk != bytes(nxt)
+
+
+def test_ratchet_step_does_not_mutate_its_input():
+    ck = bytearray(os.urandom(32))
+    before = bytes(ck)
+    crypto.ratchet_step(ck)
+    assert bytes(ck) == before
+
+
+def test_wire_key_is_not_derivable_without_the_ephemeral_dh():
+    """Dropping or swapping any of the three inputs changes the key (no input is ignored)"""
+    dh, t1, t2 = os.urandom(32), os.urandom(32), os.urandom(32)
+    k = crypto.derive_wire_key(dh, t1, t2)
+    assert k != crypto.derive_wire_key(t1, dh, t2) and k != crypto.derive_wire_key(dh, t2, t1)

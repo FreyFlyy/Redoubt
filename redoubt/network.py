@@ -10,9 +10,11 @@ import json
 import struct
 import socket
 import threading
+from dataclasses import dataclass
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from . import crypto
 from . import protocol as proto
+from . import ratchet as ratchet_mod
 from . import ratelimit
 from . import secure_memory
 from . import logger as logger_mod
@@ -55,22 +57,29 @@ class PeerMismatch(Exception):
     """Recieved fingerprint does not match expected one"""
 
 
+## Key exchange result
+
+@dataclass
+class KeyExchange:
+    """Secrets of one wire-key establishment, reused to seed the Double Ratchet"""
+    wire_key: bytes
+    eph_priv: object        # my ephemeral X25519 private key (becomes the initial ratchet key)
+    their_eph_raw: bytes    # peer ephemeral public key (raw)
+    ikm: bytes              # dh_ee || term1 || term2: depends on ephemeral secrets, NOT derivable from static keys alone
+
+
 ## Session class
 
 class Session:
-    def __init__(self, sock, peer_fingerprint, chain_mine, chain_peer, wire_key):
+    def __init__(self, sock, peer_fingerprint, ratchet, wire_key):
         self.sock = sock
         self.peer_fingerprint = peer_fingerprint
-        self.chain_mine = chain_mine    # ratchet for messages I SEND (and he/she receives)
-        self.chain_peer = chain_peer    # ratchet for messages I receive (and he/she sends)
+        self.ratchet = ratchet    # Double Ratchet state (ALWAYS access it while holding self.lock)
         self.wire_key = wire_key    # ciphers entre binary frame
         self.seen_msg_ids = set()   # set of seen message ids, to avoid double ratchet when clearing the chat with an already seen message without the other peer getting ACK (this makes them re-transmit and waste a second step, misaligning the entire chain)
         self.lock = threading.Lock()
         self.send_lock = threading.Lock()  # serializes EVERY write on the socket
         self.alive = True
-
-        self.send_index = 0    # chain_index of the NEXT message I send
-        self.recv_index = 0    # chain_index EXPECTED next from the peer
 
         # Adaptive RTO
         self.rtt_lock = threading.Lock()
@@ -84,46 +93,12 @@ class Session:
     def destroy(self):
         """To call every time a session is discarded / not used"""
         with self.lock:     # zero every important key in RAM (best-effort)
-            secure_memory.zero_bytearray(self.chain_mine)
-            secure_memory.zero_bytearray(self.chain_peer)
+            self.ratchet.destroy()
 
     def next_send_key(self):
-        """Calculate next SEND key (= their receive key) from ratchet. Returns (message_key, chain_index)."""
+        """Advance the sending ratchet. Returns (message_key, ratchet.Header)."""
         with self.lock:
-            mk, new_chain = crypto.ratchet_step(self.chain_mine)
-            secure_memory.zero_bytearray(self.chain_mine)  # zero the old key immediately
-            self.chain_mine = new_chain
-            index = self.send_index
-            self.send_index += 1
-            return mk, index
-
-    def resolve_recv_key(self, target_index: int):
-        """
-        Calculate the receive key for a given chain_index WITHOUT committing the ratchet step.
-        Fast-forwards through any gap (e.g. a message dropped by the rate limiter or lost on
-        a lossy link), instead of only ever trying the immediate next step.
-        """
-        with self.lock:
-            if target_index < self.recv_index:
-                return None  # stale replay of an already-consumed slot
-            gap = target_index - self.recv_index
-            if gap > proto.MAX_CHAIN_SKIP:
-                return None  # refuse to fast-forward too far
-            chain = self.chain_peer
-            mk = None
-            for _ in range(gap + 1):
-                mk, chain = crypto.ratchet_step(chain)
-            return mk, chain, gap + 1
-
-    def commit_recv_key(self, candidate_chain, steps: int):
-        """Commit a ratchet fast-forward previously returned by resolve_recv_key(), after message_key was used successfully"""
-        with self.lock:
-            if not self.alive:  # session died meanwhile (e.g. tie-break destroy()): discard, don't resurrect key material
-                secure_memory.zero_bytearray(candidate_chain)
-                return
-            secure_memory.zero_bytearray(self.chain_peer)   # zero the old key immediately
-            self.chain_peer = candidate_chain
-            self.recv_index += steps
+            return self.ratchet.prepare_send()
 
     def update_rtt(self, sample: float):
         """Karn/Jacobson: update the RTO estimate from a genuine RTT sample (only never-retransmitted)"""
@@ -171,6 +146,11 @@ class NetworkManager:
         self.listen_port = None  # set by start_listener()
 
         self.peer_presence = {}
+
+        # Presence fan-out (fire-and-forget): contacts with a presence attempt still running, shutdown flag
+        self._presence_inflight: set = set()
+        self._presence_inflight_lock = threading.Lock()
+        self._closing = threading.Event()
 
         # Outbox flushing
         self._flush_locks: dict = {}
@@ -222,7 +202,7 @@ class NetworkManager:
 
         # Try handshake
         try:
-            their_fp, _their_name, chain_mine, chain_peer, _their_listen_port, wire_key = self._do_handshake_outbound(sock, candidate_static_pub_raw)
+            their_fp, _their_name, ratchet, _their_listen_port, wire_key = self._do_handshake_outbound(sock, candidate_static_pub_raw)
         except Exception:
             sock.close()
             raise
@@ -231,7 +211,7 @@ class NetworkManager:
             raise PeerMismatch(f"Expected {fp[:16]}..., got {their_fp[:16]}...")
 
         # Define and install session
-        session = Session(sock, fp, chain_mine, chain_peer, wire_key)
+        session = Session(sock, fp, ratchet, wire_key)
         discarded = self._install_session(fp, session, is_inbound=False)
         if discarded:   # new session was discarded (old still alive)
             with self.sessions_lock:    # get old session
@@ -302,8 +282,8 @@ class NetworkManager:
 
     def _establish_wire_key_candidates(self, sock, candidate_pubkeys_raw: list[bytes]):
         """
-        Like _establish_wire_key, but it calculates a wire key for all possible contacts
-        (e.g. in the case of duplicated IPs with LANs). Returns (fingerprint, wire_key)
+        Like _establish_wire_key, but it calculates a KeyExchange for all possible contacts
+        (e.g. in the case of duplicated IPs with LANs). Returns (fingerprint, KeyExchange)
         pairs: decrypting with one of these only proves someone KNOWN completed the
         handshake, not WHICH known contact. Callers must bind the fingerprint that
         actually wins to whatever identity the HELLO payload later claims.
@@ -337,14 +317,14 @@ class NetworkManager:
             dh_es = crypto.x25519_shared_secret(eph_priv, peer_static_pub)
 
             wire_key = crypto.derive_wire_key(dh_ee, dh_es, dh_se)
-            candidates.append((crypto.fingerprint_of(cand_raw), wire_key))
+            candidates.append((crypto.fingerprint_of(cand_raw), KeyExchange(wire_key, eph_priv, their_eph_raw, dh_ee + dh_es + dh_se)))
 
         return candidates
 
-    def _read_packet_multi_key(self, sock, candidates: list[tuple[str, bytes]]):
+    def _read_packet_multi_key(self, sock, candidates: list[tuple[str, KeyExchange]]):
         """
         Like proto.read_packet but tries more (fingerprint, wire_key) candidates on the
-        same frame. Returns (packet, wire_key, authenticated_fp): authenticated_fp is the
+        same frame. Returns (packet, KeyExchange, authenticated_fp): authenticated_fp is the
         fingerprint of the SPECIFIC candidate whose static key produced the decrypting
         wire key. This is the cryptographically proven identity of the sender — callers
         MUST check it against whatever identity the packet itself later claims, never
@@ -366,20 +346,21 @@ class NetworkManager:
 
         nonce, ciphertext = raw[:proto.WIRE_NONCE_SIZE], raw[proto.WIRE_NONCE_SIZE:]
 
-        for fp, wk in candidates:
+        for fp, kx in candidates:
+            wk = kx.wire_key
             try:    # try decrypting with a candidate wire key
                 data = AESGCM(wk).decrypt(nonce, ciphertext, None)
                 packet = json.loads(data.decode("utf-8"))
                 proto.validate_packet(packet)
             except Exception:
                 continue  # wrong candidate, not an error, no logging
-            return packet, wk, fp   # found
+            return packet, kx, fp   # found
 
         raise proto.InvalidPacket("No candidate key could decrypt HELLO (unknown sender or IP not recognized)")
 
     def _establish_wire_key(self, sock, candidate_static_pub_raw: bytes, is_initiator: bool):
         """
-        Establishes an authenticated wire key.
+        Establishes an authenticated wire key and returns a KeyExchange (wire key + ephemeral secrets for the ratchet).
         Requires both peers have eachother's Public Keys.
         Otherwise will raise PeerMismatch
         """
@@ -425,7 +406,7 @@ class NetworkManager:
         # Get final wire key
         wire_key = crypto.derive_wire_key(dh_ee, term1, term2)
 
-        return wire_key
+        return KeyExchange(wire_key, eph_priv, their_eph_raw, dh_ee + term1 + term2)
 
 
     ## Handshake
@@ -433,7 +414,8 @@ class NetworkManager:
     def _do_handshake_outbound(self, sock, candidate_static_pub_raw: bytes):
         """Prepare and initiate handshake"""
         # Establish wire key
-        wire_key = self._establish_wire_key(sock, candidate_static_pub_raw, is_initiator=True)
+        kx = self._establish_wire_key(sock, candidate_static_pub_raw, is_initiator=True)
+        wire_key = kx.wire_key
 
         nonce_mine = os.urandom(16)
 
@@ -471,7 +453,7 @@ class NetworkManager:
                 f"Peer is not in the contact list: {ack["fingerprint"][:16]}..."
             )
 
-        return self._finalize_handshake(ack, nonce_mine) + (wire_key,)
+        return self._finalize_handshake(ack, nonce_mine, kx, is_initiator=True) + (wire_key,)
 
     def _do_handshake_inbound(self, sock, addr):
         """Prepare to receive handshake"""
@@ -494,7 +476,8 @@ class NetworkManager:
 
         if result is None:
             raise proto.InvalidPacket("Failed Handshake: HELLO missing")
-        hello, wire_key, authenticated_fp = result
+        hello, kx, authenticated_fp = result
+        wire_key = kx.wire_key
 
         if hello["type"] != "HELLO":
             raise proto.InvalidPacket("Failed Handshake: peer did not HELLO")
@@ -517,10 +500,10 @@ class NetworkManager:
         )
         sock.sendall(proto.frame(proto.add_padding(ack), wire_key))
 
-        return self._finalize_handshake(hello, nonce_mine) + (wire_key,)
+        return self._finalize_handshake(hello, nonce_mine, kx, is_initiator=False) + (wire_key,)
 
-    def _finalize_handshake(self, their_packet, my_nonce):
-        """Finalize handshake and get chain keys"""
+    def _finalize_handshake(self, their_packet, my_nonce, kx: KeyExchange, is_initiator: bool):
+        """Finalize handshake: derive the root key and build the Double Ratchet"""
 
         their_pub_raw = proto.unb64(their_packet["identity_pub"])
         their_fp = their_packet["fingerprint"]
@@ -535,25 +518,22 @@ class NetworkManager:
         if self.storage.get_contact(their_fp) is None:
             raise PeerMismatch("Fingerprint was not found in contacts")
 
-        their_pub = crypto.public_key_from_raw(their_pub_raw)
-
-        # Compute shared secret (MyPriv × TheirPub)
-        shared = crypto.x25519_shared_secret(self.identity.private_key, their_pub)
-
         # Order nonces deterministically
         their_nonce = proto.unb64(their_packet["session_nonce"])
         nonce_a, nonce_b = sorted(
             [my_nonce, their_nonce]
         )
 
-        # Derive root key
-        root = crypto.derive_root_key(shared, nonce_a, nonce_b)
+        # Root key from the SAME secrets as the wire key (ephemeral-ephemeral + both static-ephemeral DHs):
+        # a stolen static identity key alone is NOT enough to recompute it (the ephemeral private keys are not stored)
+        root = crypto.derive_root_key(kx.ikm, nonce_a, nonce_b)
 
-        # Derive both chains (MySend&Theirreceive and Myreceive&TheirSend)
-        chain_mine = crypto.initial_chain_key(root, self.identity.fingerprint)
-        chain_peer = crypto.initial_chain_key(root, their_fp)
+        if is_initiator:
+            ratchet = ratchet_mod.DoubleRatchet.initiator(root, kx.eph_priv, kx.their_eph_raw)
+        else:
+            ratchet = ratchet_mod.DoubleRatchet.responder(root, kx.eph_priv, kx.their_eph_raw)
 
-        return (their_fp, their_packet.get("name", their_fp[:16]), chain_mine, chain_peer, their_packet["listen_port"])
+        return (their_fp, their_packet.get("name", their_fp[:16]), ratchet, their_packet["listen_port"])
 
     def _flush_if_online(self, contact_fingerprint: str):
         """To only use when we know a peer is online (flushes "pending messages" outbox)"""
@@ -563,10 +543,19 @@ class NetworkManager:
 
     ## Presence
 
-    def send_presence(self, contact, status):
-        """Send presence to a specific contact"""
-        try:    # connect
-            session = self._get_or_connect(contact)
+    def send_presence(self, contact, status, connect=True):
+        """
+        Send presence to a specific contact (fire-and-forget: no reply is awaited).
+        connect=False only uses an already-live session: nothing is opened, nothing can block on a handshake
+        """
+        try:
+            if connect:
+                session = self._get_or_connect(contact)
+            else:
+                with self.sessions_lock:
+                    session = self.sessions.get(contact[0])
+                if session is None or not session.alive:
+                    return
 
             # Create packet and send
             packet = proto.build_presence(
@@ -578,12 +567,46 @@ class NetworkManager:
             session.send(proto.add_padding(packet))
 
         except Exception:   # if can't connect, mark offline
-            self.on_status(contact[0], "offline")
+            if connect:
+                self.on_status(contact[0], "offline")
 
-    def broadcast_presence(self, status):
-        """Send presence to all contacts"""
+    def _presence_task(self, contact, status, connect):
+        """Worker of broadcast_presence (one thread per contact)"""
+        try:
+            if status == "online" and self._closing.is_set():
+                return  # never announce "online" after shutdown began
+            self.send_presence(contact, status, connect=connect)
+        finally:
+            with self._presence_inflight_lock:
+                self._presence_inflight.discard(contact[0])
+
+    def broadcast_presence(self, status, wait=None):
+        """
+        Send presence to all contacts in PARALLEL, one thread per contact, treating packets as fire-and-forget
+        (like UDP: a slow/unreachable peer never delays the others nor the caller).
+        - "online": may open new sessions. A contact whose previous attempt is still running is skipped (no thread pile-up)
+        - "offline": only uses already-live sessions (a new handshake just to say goodbye is useless)
+        wait=None returns immediately; wait=<seconds> joins workers up to that GLOBAL deadline (shutdown use)
+        """
+        connect = (status != "offline")
+        if not connect:
+            self._closing.set()
+
+        workers = []
         for contact in self.storage.list_contacts():
-            self.send_presence(contact, status)
+            fp = contact[0]
+            with self._presence_inflight_lock:
+                if fp in self._presence_inflight:
+                    continue
+                self._presence_inflight.add(fp)
+            t = threading.Thread(target=self._presence_task, args=(contact, status, connect), daemon=True)
+            t.start()
+            workers.append(t)
+
+        if wait is not None:
+            deadline = time.monotonic() + wait
+            for t in workers:
+                t.join(max(0.0, deadline - time.monotonic()))
 
     def _presence_loop(self):
         """Loop to regularly send presence packets to all peers"""
@@ -688,7 +711,7 @@ class NetworkManager:
     def _handle_inbound(self, sock, addr):
         """Handle inbound traffic and sessions"""
         try:    # try getting inbound handshake
-            their_fp, _their_name, chain_mine, chain_peer, _their_listen_port, wire_key = self._do_handshake_inbound(sock, addr)
+            their_fp, _their_name, ratchet, _their_listen_port, wire_key = self._do_handshake_inbound(sock, addr)
         except (proto.InvalidPacket, OSError) as e:
             self.on_statusbar_message("?", f"Failed handshake from {addr[0]}: {e}")
             sock.close()
@@ -708,7 +731,7 @@ class NetworkManager:
             self.on_statusbar_message(their_fp, "Tried handshake but not in contact list")
 
         # Install session (new if neeeded)
-        session = Session(sock, their_fp, chain_mine, chain_peer, wire_key)
+        session = Session(sock, their_fp, ratchet, wire_key)
         discarded = self._install_session(their_fp, session, is_inbound=True)
         if discarded:   # old session is mantained
             return
@@ -732,24 +755,36 @@ class NetworkManager:
                 logger.exception("OS error in _handle_incoming_message: session.send(proto.add_padding(proto.build_message_ack(msg_id, self.identity.fingerprint)))")
             return
 
-        resolved = session.resolve_recv_key(packet["chain_index"])    # candidate step(s), not yet committed
-        if resolved is None:
-            self.on_statusbar_message(session.peer_fingerprint, "chain desync beyond recovery, session closed")
-            logger.warning(f"Chain gap beyond recovery from {session.peer_fingerprint[:16]}... (expected >= {session.recv_index}, got {packet['chain_index']}), killing session")
-            session.alive = False   # force a clean reconnect/re-handshake instead of stalling forever
-            return
-
-        mk, candidate_chain, steps = resolved
+        header = ratchet_mod.Header(proto.unb64(packet["dh"]), packet["pn"], packet["chain_index"])
         aad = proto.message_aad(packet)
-        try:    # try decrypting
-            plaintext = crypto.decrypt_message(mk, proto.unb64(packet["nonce"]), proto.unb64(packet["ciphertext"]), aad)
-        except Exception:   # unable, could be corrupted, modified or misaligned with the keychain
-            self.on_statusbar_message(session.peer_fingerprint, "cannot decipher message, dropped")
-            logger.exception(f"Cannot decipher message from {session.peer_fingerprint[:16]}..., dropped")
-            secure_memory.zero_bytearray(candidate_chain)   # discard the unused candidate step; chain_peer untouched, a legit retransmission can retry
-            return
 
-        session.commit_recv_key(candidate_chain, steps)    # decrypted successfully: NOW advance the ratchet for real
+        # prepare -> decrypt -> commit under the session lock: the receive step can also change the SENDING chain
+        # (DH step), so it must not interleave with next_send_key()
+        with session.lock:
+            if not session.alive:
+                return
+            try:    # candidate step(s), not yet committed
+                mk, commit = session.ratchet.prepare_receive(header)
+            except ratchet_mod.RatchetError as e:
+                self.on_statusbar_message(session.peer_fingerprint, "chain desync beyond recovery, session closed")
+                logger.warning(f"Ratchet error from {session.peer_fingerprint[:16]}...: {e} (chain_index {packet['chain_index']}), killing session")
+                session.alive = False   # force a clean reconnect/re-handshake instead of stalling forever
+                return
+
+            try:    # try decrypting
+                plaintext = crypto.decrypt_message(mk, proto.unb64(packet["nonce"]), proto.unb64(packet["ciphertext"]), aad)
+            except Exception:   # unable, could be corrupted or modified: ratchet state is untouched
+                self.on_statusbar_message(session.peer_fingerprint, "cannot decipher message, dropped")
+                logger.exception(f"Cannot decipher message from {session.peer_fingerprint[:16]}..., dropped")
+                return
+
+            try:
+                commit()    # decrypted successfully: NOW advance the ratchet for real
+            except ratchet_mod.RatchetError as e:   # cannot happen while the session lock is held; fail closed anyway
+                logger.error(f"Ratchet commit refused for {session.peer_fingerprint[:16]}...: {e}, killing session")
+                session.alive = False
+                return
+
         session.seen_msg_ids.add(msg_id)    # only mark seen once actually decrypted, so a failed attempt can be retried
 
         # Store message and put in UI the recieval
@@ -872,12 +907,17 @@ class NetworkManager:
 
             # Get ts and send key
             timestamp = proto.now_ms()
-            mk, chain_index = session.next_send_key()
+            try:
+                mk, header = session.next_send_key()
+            except ratchet_mod.RatchetError:    # session destroyed under us (peer closed / shutdown): message stays in the outbox
+                session.alive = False
+                break
             # Construct packet
-            partial = {"type": "MESSAGE", "id": msg_id, "sender": self.identity.fingerprint, "timestamp": timestamp, "chain_index": chain_index}
+            partial = {"type": "MESSAGE", "id": msg_id, "sender": self.identity.fingerprint, "timestamp": timestamp,
+                       "chain_index": header.n, "dh": proto.b64(header.dh), "pn": header.pn}
             aad = proto.message_aad(partial)
             nonce, ct = crypto.encrypt_message(mk, text, aad)
-            packet = proto.build_message(msg_id, self.identity.fingerprint, timestamp, nonce, ct, chain_index)
+            packet = proto.build_message(msg_id, self.identity.fingerprint, timestamp, nonce, ct, header.n, header.dh, header.pn)
             packet = proto.add_padding(packet)
             try:    # try to send packet and store
                 session.send(packet)

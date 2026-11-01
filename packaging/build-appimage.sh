@@ -48,7 +48,6 @@ cp packaging/redoubt.png "$APPDIR/redoubt.png"
 chmod +x "$APPDIR/AppRun"
 
 # AppImage
-mkdir -p "$ROOT/appimages"
-ARCH="$ARCH" appimagetool "$APPDIR" "$ROOT/appimages/Redoubt-$VERSION-$ARCH.AppImage"
+ARCH="$ARCH" appimagetool "$APPDIR" "$ROOT/Redoubt-$VERSION-$ARCH.AppImage"
 
-echo "Build completed: appimages/Redoubt-$VERSION-$ARCH.AppImage"
+echo "Build completed: Redoubt-$VERSION-$ARCH.AppImage"

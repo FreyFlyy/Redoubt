@@ -92,7 +92,8 @@ def x25519_shared_secret(my_priv: X25519PrivateKey, their_pub: X25519PublicKey) 
     return my_priv.exchange(their_pub)
 
 def derive_root_key(shared_secret: bytes, nonce_a: bytes, nonce_b: bytes) -> bytes:
-    """Derive the application session Root Key using HKDF-SHA256, alphabetically sorting the two nonces to derive a deterministic salt"""
+    """Derive the initial Root Key of the Double Ratchet using HKDF-SHA256, alphabetically sorting the two nonces to derive a deterministic salt.
+    `shared_secret` MUST contain ephemeral DH outputs (dh_ee || term1 || term2): never feed it static-static DH only, or a stolen identity key recomputes the root of every recorded session"""
     ordered = sorted([nonce_a, nonce_b])
     salt = ordered[0] + ordered[1]
     hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=salt, info=b"PRIVACY IS A RIGHT")

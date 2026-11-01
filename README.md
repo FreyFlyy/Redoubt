@@ -104,7 +104,7 @@ Redoubt is distributed as a standalone AppImage for Linux.
 
 AppImages bundle the application and its Python dependencies, allowing Redoubt to run without manually installing Python packages or configuring a virtual environment.
 
-1. Download the latest AppImage from [./appimages](https://github.com/FreyFlyy/Redoubt/tree/main/appimages) (NOTE: only x86_64 architecture is compiled, follow [Building from source](#building-from-source) for other systems).
+1. Download the latest AppImage from [GitHub Releases](https://github.com/FreyFlyy/Redoubt/releases) (NOTE: only x86_64 architecture is compiled, follow [Building from source](#building-from-source) for other systems).
 2. Make the file executable:
 
 ```bash

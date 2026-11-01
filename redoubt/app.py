@@ -3,7 +3,6 @@ Entry point CLI of Redoubt
 """
 
 import sys
-import time
 import argparse
 import ipaddress
 
@@ -196,8 +195,7 @@ def _run() -> int:
         return 0
     finally:    # at quit, on errors and after CLI commands
         if network_running:
-            network.broadcast_presence("offline")
-            time.sleep(0.5)
+            network.broadcast_presence("offline", wait=1.0)   # parallel, live sessions only, 1s global cap
             network.stop()
         ident.wipe()
         print("Closing...")

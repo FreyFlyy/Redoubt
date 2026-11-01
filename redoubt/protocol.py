@@ -75,14 +75,16 @@ def build_presence(msg_type, sender_fp, status):
         "timestamp": now_ms(),
     }
 
-def build_message(msg_id, sender_fp, timestamp, nonce, ciphertext, chain_index):
-    """Build MESSAGE packets"""
+def build_message(msg_id, sender_fp, timestamp, nonce, ciphertext, chain_index, dh_raw, pn):
+    """Build MESSAGE packets (dh_raw = sender's current ratchet public key, pn = length of the previous sending chain)"""
     return {
         "type": "MESSAGE",
         "id": msg_id,
         "sender": sender_fp,
         "timestamp": timestamp,
         "chain_index": chain_index,
+        "dh": b64(dh_raw),
+        "pn": pn,
         "nonce": b64(nonce),
         "ciphertext": b64(ciphertext),
     }
@@ -125,7 +127,7 @@ def add_padding(packet: dict) -> dict:
 
 def message_aad(packet: dict) -> bytes:
     """Generate AAD (Additional Authenticated Data) to ensure message integrity"""
-    return f"{packet['type']}|{packet['id']}|{packet['sender']}|{packet['timestamp']}|{packet['chain_index']}".encode("utf-8")
+    return f"{packet['type']}|{packet['id']}|{packet['sender']}|{packet['timestamp']}|{packet['chain_index']}|{packet['dh']}|{packet['pn']}".encode("utf-8")
 
 
 ## Validation
@@ -160,12 +162,14 @@ def validate_packet(packet: dict):
             raise InvalidPacket("Invalid listening port")
 
     elif t == "MESSAGE":
-        for field in ("id", "sender", "timestamp", "chain_index", "nonce", "ciphertext"):
+        for field in ("id", "sender", "timestamp", "chain_index", "dh", "pn", "nonce", "ciphertext"):
             if field not in packet:
                 raise InvalidPacket(f"Missing field in {t}: {field}")
         try:    # verify base64 integrity
             unb64(packet["nonce"])
             unb64(packet["ciphertext"])
+            if len(unb64(packet["dh"])) != 32:
+                raise ValueError("ratchet key length")
         except Exception:
             raise InvalidPacket(f"Invalid base64 in {t}")
         if not isinstance(packet["id"], str) or len(packet["id"]) > 64:
@@ -176,6 +180,8 @@ def validate_packet(packet: dict):
             raise InvalidPacket("Invalid timestamp field")
         if isinstance(packet["chain_index"], bool) or not isinstance(packet["chain_index"], int) or not (0 <= packet["chain_index"] < 2**31):
             raise InvalidPacket("Invalid chain_index field")
+        if isinstance(packet["pn"], bool) or not isinstance(packet["pn"], int) or not (0 <= packet["pn"] < 2**31):
+            raise InvalidPacket("Invalid pn field")
 
     elif t == "MESSAGE_ACK":
         for field in ("id", "sender"):
