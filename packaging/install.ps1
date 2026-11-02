@@ -99,8 +99,19 @@ try {
     }
 
     # Replace previous installation only after validation
-    Get-ChildItem $InstallDir -Force |
-        Remove-Item -Recurse -Force
+    # Update application files without deleting user data
+    $AppFiles = @(
+        "Redoubt.exe",
+        "_internal"
+    )
+
+    foreach ($File in $AppFiles) {
+        $Destination = Join-Path $InstallDir $File
+
+        if (Test-Path $Destination) {
+            Remove-Item $Destination -Recurse -Force
+        }
+    }
 
     Copy-Item `
         -Path (Join-Path $SourceDir "*") `
