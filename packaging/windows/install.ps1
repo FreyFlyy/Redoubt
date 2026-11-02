@@ -16,7 +16,6 @@ $IconPng = Join-Path $InstallDir "redoubt.png"
 $IconIco = Join-Path $InstallDir "redoubt.ico"
 
 $ReleaseApi = "https://api.github.com/repos/$Repo/releases/latest"
-
 $RawBaseUrl = "https://raw.githubusercontent.com/$Repo/$Branch"
 
 $IconUrl = "$RawBaseUrl/packaging/redoubt.png"
@@ -43,7 +42,7 @@ Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 
 # ============================================================
-# 1. Download latest release
+# 1. Download latest Windows release
 # ============================================================
 
 Write-Host "[1/5] Downloading latest Redoubt release..." -ForegroundColor Cyan
@@ -56,7 +55,7 @@ $Release = Invoke-RestMethod `
     }
 
 $Version = $Release.tag_name -replace '^v', ''
-$ExpectedAssetName = "Redoubt-$Version-x86_64.exe"
+$ExpectedAssetName = "Redoubt-$Version-windows-x86_64.zip"
 
 $Asset = $Release.assets |
     Where-Object {
@@ -67,31 +66,58 @@ $Asset = $Release.assets |
     Select-Object -First 1
 
 if (-not $Asset) {
-    throw "Windows executable not found in release $($Release.tag_name). Expected: $ExpectedAssetName"
+    throw "Windows archive not found: $ExpectedAssetName"
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-$TempExe = Join-Path $env:TEMP "$([guid]::NewGuid()).exe"
+$TempZip = Join-Path $env:TEMP "$([guid]::NewGuid()).zip"
+$TempExtract = Join-Path $env:TEMP "$([guid]::NewGuid())"
 
 try {
     Invoke-WebRequest `
         -Uri $Asset.browser_download_url `
-        -OutFile $TempExe
+        -OutFile $TempZip
 
-    if (-not (Test-Path $TempExe) -or (Get-Item $TempExe).Length -eq 0) {
-        throw "Downloaded executable is missing or empty."
+    if ((Get-Item $TempZip).Length -eq 0) {
+        throw "Downloaded archive is empty."
     }
 
-    Move-Item -Path $TempExe -Destination $ExePath -Force
+    Expand-Archive `
+        -Path $TempZip `
+        -DestinationPath $TempExtract `
+        -Force
+
+    $SourceDir = Join-Path $TempExtract "redoubt"
+
+    if (-not (Test-Path (Join-Path $SourceDir "Redoubt.exe"))) {
+        throw "Redoubt.exe not found inside archive."
+    }
+
+    if (-not (Test-Path (Join-Path $SourceDir "_internal"))) {
+        throw "_internal directory not found inside archive."
+    }
+
+    # Replace previous installation only after validation
+    Get-ChildItem $InstallDir -Force |
+        Remove-Item -Recurse -Force
+
+    Copy-Item `
+        -Path (Join-Path $SourceDir "*") `
+        -Destination $InstallDir `
+        -Recurse -Force
+
+    Write-Host "Installed version: $($Release.tag_name)" -ForegroundColor Green
 }
 finally {
-    if (Test-Path $TempExe) {
-        Remove-Item $TempExe -Force
+    if (Test-Path $TempZip) {
+        Remove-Item $TempZip -Force
+    }
+
+    if (Test-Path $TempExtract) {
+        Remove-Item $TempExtract -Recurse -Force
     }
 }
-
-Write-Host "Installed version: $($Release.tag_name)" -ForegroundColor Green
 
 # ============================================================
 # 2. Download icon and install fonts
@@ -289,6 +315,7 @@ Write-Host "  $InstallDir"
 Write-Host ""
 Write-Host "Installed files:"
 Write-Host "  Redoubt.exe"
+Write-Host "  _internal/"
 Write-Host "  redoubt.png"
 Write-Host "  redoubt.ico"
 
