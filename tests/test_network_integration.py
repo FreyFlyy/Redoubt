@@ -294,6 +294,8 @@ def _mk_session(peer_fp, sock_pair=None):
 @pytest.fixture
 def two_nodes(tmp_path, fast_kdf):
     a, b = Peer(tmp_path, "alice", listen=False), Peer(tmp_path, "bob", listen=False)
+    a.add_contact(b)   # _install_session refuses sessions of contacts that are no longer in storage (revoked)
+    b.add_contact(a)
     yield a, b
     a.close(); b.close()
 
@@ -334,6 +336,7 @@ def test_install_session_same_direction_twice_follows_the_node_preference(two_no
     """CHARACTERIZATION of current behaviour: the tie-break looks only at direction, not at age. A second INBOUND
     session replaces the first one only on the node that prefers inbound; the other node keeps the old session."""
     a, _ = two_nodes
+    a.net.storage.add_contact(peer_fp, "peer", "127.0.0.1", 12345, proto.b64(crypto.public_key_to_raw(crypto.generate_x25519_keypair().public_key())))
     assert (a.fp < peer_fp) == node_prefers_inbound
     s1, p1 = _mk_session(peer_fp)
     s2, p2 = _mk_session(peer_fp)

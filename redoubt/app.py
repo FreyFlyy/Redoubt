@@ -4,29 +4,20 @@ Entry point CLI of Redoubt
 
 import sys
 import argparse
-import ipaddress
-
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
 
 from . import __version__
 from . import crypto
 from . import secure_memory
+from . import contact_validation
 from . import identity as identity_mod
 from . import network as network_mod
 from . import protocol as protocol_mod
 from . import storage as storage_mod
+from .contact_validation import format_fingerprint, normalize_fingerprint  # re-exported (kept importable from app)
 from .ui import RedoubtApp
 
 
 ## Commands and helper functions
-
-def format_fingerprint(fp: str) -> str:
-    """Format sha256 fingerprint into 4-char spaced blocks"""
-    return " ".join(fp[i:i + 4] for i in range(0, len(fp), 4))
-
-def normalize_fingerprint(s: str) -> str:
-    """Remove every whitespace character and lowercase (fingerprints are lowercase hex)"""
-    return "".join(s.split()).lower()
 
 def cmd_show_card(ident):
     """Show personal identity card: PubKey and fingerprint (=sha256 of the PubKey)"""
@@ -43,39 +34,12 @@ def cmd_add_contact(storage, ident):
     pubkey_b64 = input("Public key (base64): ").strip()
     fingerprint_input = normalize_fingerprint(input("Fingerprint (with or without spaces): "))
 
-    if not name:
-        print("[ERROR] Name cannot be empty. Contact was not added.")
-        return
-
     try:
-        addr = ipaddress.ip_address(ip_input)
-        if addr.is_unspecified or addr.is_multicast:
-            raise ValueError
-        ip = str(addr)  # canonical form, so it matches the source IP seen by the listener
-    except ValueError:
-        print("[ERROR] Not a valid peer IP address. Contact was not added.")
-        return
-
-    try:
-        pubkey_raw = protocol_mod.unb64(pubkey_b64)
-        if len(pubkey_raw) != 32:
-            raise ValueError("wrong length")
-        X25519PublicKey.from_public_bytes(pubkey_raw)
-    except Exception:
-        print("[ERROR] Public key is not a valid X25519 key (base64 of 32 bytes). Contact was not added.")
-        return
-
-    computed_fp = crypto.fingerprint_of(pubkey_raw)
-    if computed_fp != fingerprint_input:
-        print("[ERROR] Fingerprint does not match Public key. Contact was not added. always share on a secure out-of-band channel.")
-        return
-
-    if computed_fp == ident.fingerprint:
-        print("[ERROR] This is your own identity. Contact was not added.")
-        return
-
-    if storage.get_contact(computed_fp) is not None:
-        print("[ERROR] A contact with this fingerprint already exists. Contact was not added.")
+        name, ip, pubkey_b64, computed_fp = contact_validation.validate_new_contact(
+            storage, ident, name, ip_input, pubkey_b64, fingerprint_input
+        )
+    except ValueError as e:
+        print(f"[ERROR] {e} Contact was not added.")
         return
 
     confirm = input("Fingerprint matches Public Key. Add contact? (yes/no): ").strip().lower()

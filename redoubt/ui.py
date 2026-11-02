@@ -8,14 +8,18 @@ import os
 import time
 import json
 from datetime import datetime
+from . import __version__
+from . import contact_validation
 from . import protocol as proto
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Header, Input, Label, ListItem, ListView, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 from textual.screen import ModalScreen
 from textual.widgets import Button
 from textual.binding import Binding
 from rich.markup import escape
+from .network import DEFAULT_PORT
 from .themes import PYTHON, NORD, HELL, AMETHYST
 from . import logger as logger_mod
 logger = logger_mod.get_logger(__name__)
@@ -149,7 +153,7 @@ class ContactItem(ListItem):
 ## Model CSS block for popups
 
 MODAL_CSS = """
-ConfirmClearScreen, ConfirmQuitScreen {
+ConfirmClearScreen, ConfirmQuitScreen, ConfirmRevokeScreen, AboutScreen {
     align: center middle;
     background: $background 60%;
 }
@@ -241,6 +245,394 @@ class ConfirmQuitScreen(ModalScreen):
             self.dismiss(False)
 
 
+
+## Settings dropdown menu class
+
+class SettingsMenuScreen(ModalScreen):
+    """Dropdown anchored under the top-left menu button. Dismisses with the chosen option id (or None)"""
+    CSS = """
+    SettingsMenuScreen {
+        align: left top;
+        background: $background 0%;
+    }
+
+    #settings_menu {
+        width: 24;
+        height: auto;
+        margin: 2 0 0 0;
+        background: $panel;
+        border: tall $secondary;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "close", show=False)]
+
+    def compose(self) -> ComposeResult:
+        """Compose the dropdown"""
+        yield OptionList(
+            Option("About", id="about"),
+            Option("Show card", id="show_card"),
+            Option("Contact list", id="contacts"),
+            Option("Add contact", id="add"),
+            id="settings_menu",
+        )
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self.dismiss(event.option.id)
+
+    def on_click(self, event) -> None:
+        """Click outside the dropdown closes it"""
+        widget, _region = self.get_widget_at(event.screen_x, event.screen_y)
+        if widget is self:
+            self.dismiss(None)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+## About class
+
+class AboutScreen(ModalScreen):
+    CSS = MODAL_CSS
+
+    BINDINGS = [Binding("escape", "close", show=False)]
+
+    def compose(self) -> ComposeResult:
+        """Compose the popup"""
+        with Vertical(id="dialog"):
+            yield Label(f"Francesco Scolz\nRedoubt {__version__}\nAGPL 3.0")
+            with Horizontal(id="buttons_row"):
+                yield Button("Close", id="close", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+## Show card class
+
+class ShowCardScreen(ModalScreen):
+    """Personal identity card: own PubKey and fingerprint. Share out-of-band only or on a secure channel"""
+
+    CSS = """
+    ShowCardScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+
+    #card_dialog {
+        width: 70;
+        height: auto;
+        background: $panel;
+        padding: 1 2;
+    }
+
+    #card_dialog Label {
+        width: 100%;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #card_dialog Label.hint {
+        color: $text-muted;
+    }
+
+    #card_buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "close", show=False)]
+
+    def __init__(self, identity):
+        super().__init__()
+        self._identity = identity
+
+    def compose(self) -> ComposeResult:
+        """Compose the popup: own PubKey and fingerprint, to share out-of-band or on a secure channel"""
+        with Vertical(id="card_dialog"):
+            yield Label("[b]Identity card[/]", id="card_title")
+            yield Label(f"[b]Fingerprint[/] : {contact_validation.format_fingerprint(self._identity.fingerprint)}", id="card_fingerprint")
+            yield Label(f"[b]Public key[/]  : {proto.b64(self._identity.public_key_raw)}", id="card_public_key")
+            yield Label("Verify the fingerprint with the contact BEFORE messaging.", classes="hint")
+            with Horizontal(id="card_buttons"):
+                yield Button("Close", id="close", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Set behaviour when pressing different buttons"""
+        event.stop()
+        self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+## Confirm revoke contact class
+
+class ConfirmRevokeScreen(ModalScreen):
+    CSS = MODAL_CSS
+
+    def __init__(self, contact_name: str):
+        super().__init__()
+        self.revoke_name = contact_name
+
+    def compose(self) -> ComposeResult:
+        """Compose the popup"""
+        with Vertical(id="dialog"):
+            yield Label(
+                f"[b]Revoke contact[/]\n\nRemove [b]{escape(self.revoke_name)}[/], delete all its messages "
+                f"and revoke trust? You will need to add it again to chat with it."
+            )
+            with Horizontal(id="buttons_row"):
+                # avoid highlighting the "dangerous" button
+                yield Button("Yes", id="yes", classes="neutral")
+                yield Button("No", id="no", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Set behaviour when pressing different buttons"""
+        event.stop()
+        self.dismiss(event.button.id == "yes")
+
+
+## Contact list class
+
+class RevokeButton(Button):
+    """Revoke button bound to one contact"""
+    def __init__(self, fingerprint: str, contact_name: str):
+        super().__init__("Revoke", classes="revoke_btn")
+        self.fingerprint = fingerprint
+        self.contact_name = contact_name
+
+
+class ContactListScreen(ModalScreen):
+    CSS = """
+    ContactListScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+
+    #cl_dialog {
+        width: 90%;
+        max-width: 110;
+        height: auto;
+        max-height: 90vh;
+        background: $panel;
+        padding: 1 2;
+    }
+
+    #cl_title {
+        width: 100%;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #cl_scroll {
+        height: auto;
+        max-height: 70vh;
+    }
+
+    .contact_row {
+        height: auto;
+        margin-bottom: 1;
+        border-bottom: solid $primary-darken-2;
+    }
+
+    .contact_info {
+        width: 1fr;
+        height: auto;
+    }
+
+    .revoke_btn {
+        width: 12;
+        margin: 0 0 0 2;
+    }
+
+    #cl_buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "close", show=False)]
+
+    def __init__(self, contacts):
+        super().__init__()
+        self._contacts = contacts
+        self._remaining = len(contacts)
+
+    def compose(self) -> ComposeResult:
+        """Compose the popup: one row per contact (name, IP, PubKey, FP) with its Revoke button"""
+        with Vertical(id="cl_dialog"):
+            yield Label("[b]Contact list[/]", id="cl_title")
+            with VerticalScroll(id="cl_scroll"):
+                if not self._contacts:
+                    yield Label("No saved contacts.", id="cl_empty")
+                for fp, name, ip, _port, pubkey_b64 in self._contacts:
+                    with Horizontal(classes="contact_row"):
+                        yield Static(
+                            f"[b]{escape(name)}[/]\n"
+                            f"IP: {escape(str(ip))}\n"
+                            f"PubKey: {escape(pubkey_b64)}\n"
+                            f"FP: {contact_validation.format_fingerprint(fp)}",
+                            classes="contact_info",
+                        )
+                        yield RevokeButton(fp, name)
+            with Horizontal(id="cl_buttons"):
+                yield Button("Close", id="cl_close", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        button = event.button
+
+        if button.id == "cl_close":
+            self.dismiss()
+            return
+
+        if isinstance(button, RevokeButton):
+            def after_confirm(confirmed):
+                if not confirmed:
+                    return
+                self.app.revoke_contact(button.fingerprint)
+                button.parent.remove()  # remove the contact row
+                self._remaining -= 1
+                if self._remaining == 0:
+                    self.query_one("#cl_scroll").mount(Label("No saved contacts.", id="cl_empty"))
+
+            self.app.push_screen(ConfirmRevokeScreen(button.contact_name), after_confirm)
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+## Add contact class
+
+class AddContactScreen(ModalScreen):
+    """Form with 4 fields (Name, IP, PubKey, Fingerprint). Dismisses with the new contact name, or None"""
+    CSS = """
+    AddContactScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+
+    #form_dialog {
+        width: 70;
+        height: auto;
+        background: $panel;
+        padding: 1 2;
+    }
+
+    #form_title {
+        width: 100%;
+        text-align: center;
+    }
+
+    #form_dialog Label.field {
+        margin-top: 1;
+        color: $text-muted;
+    }
+
+    #form_error {
+        height: auto;
+        margin-top: 1;
+        color: $error;
+    }
+
+    #form_buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    #form_buttons Button {
+        margin: 0 1;
+        width: 20;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    FIELD_ORDER = ("add_name", "add_ip", "add_pubkey", "add_fp")
+
+    def __init__(self, storage, identity):
+        super().__init__()
+        self._storage = storage
+        self._identity = identity
+
+    def compose(self) -> ComposeResult:
+        """Compose the form"""
+        with Vertical(id="form_dialog"):
+            yield Label("[b]Add contact[/]", id="form_title")
+            yield Label("Name (only visible by you)", classes="field")
+            yield Input(placeholder="Name", id="add_name")
+            yield Label("IP", classes="field")
+            yield Input(placeholder="IP", id="add_ip")
+            yield Label("Public key (base64)", classes="field")
+            yield Input(placeholder="Public key", id="add_pubkey")
+            yield Label("Fingerprint (with or without spaces)", classes="field")
+            yield Input(placeholder="Fingerprint", id="add_fp")
+            yield Static("", id="form_error")
+            with Horizontal(id="form_buttons"):
+                yield Button("Add", id="form_add", variant="primary")
+                yield Button("Cancel", id="form_cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#add_name", Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()    # do not leak to the app-level handler
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Enter moves to the next field; on the last one it submits the form"""
+        event.stop()    # IMPORTANT: otherwise the app-level handler would send this text as a chat message
+        i = self.FIELD_ORDER.index(event.input.id)
+        if i < len(self.FIELD_ORDER) - 1:
+            self.query_one(f"#{self.FIELD_ORDER[i + 1]}", Input).focus()
+        else:
+            self.submit()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "form_add":
+            self.submit()
+        else:
+            self.dismiss(None)
+
+    def submit(self) -> None:
+        """Validate (same checks as the CLI), store the contact and close"""
+        error = self.query_one("#form_error", Static)
+        values = [self.query_one(f"#{fid}", Input).value for fid in self.FIELD_ORDER]
+
+        try:
+            name, ip, pubkey_b64, fingerprint = contact_validation.validate_new_contact(
+                self._storage, self._identity, *values
+            )
+        except ValueError as e:
+            error.update(str(e))
+            return
+
+        try:
+            self._storage.add_contact(fingerprint, name, ip, DEFAULT_PORT, pubkey_b64)
+        except Exception:
+            logger.exception("Cannot store new contact")
+            error.update("Cannot save the contact (see log).")
+            return
+
+        self.dismiss(name)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 ## App class
 
 class RedoubtApp(App):
@@ -266,6 +658,30 @@ class RedoubtApp(App):
     CSS = """
     Screen {
         color: $text;
+    }
+
+    #topbar {
+        height: 1;
+        background: $panel;
+    }
+
+    #topbar #settings_btn {
+        height: 1;
+        min-width: 0;
+        padding: 0 2;
+        border: none;
+        background: $panel;
+        color: $text;
+    }
+
+    #topbar #settings_btn:hover, #topbar #settings_btn:focus {
+        border: none;
+        background: $secondary-darken-2;
+    }
+
+    #topbar Header {
+        dock: none;
+        width: 1fr;
     }
 
     #sidebar {
@@ -328,6 +744,7 @@ class RedoubtApp(App):
         Binding("ctrl+q", "request_quit", "(Q)uit", show=True),
         Binding("ctrl+l", "clear_chat", "C(L)ear chat", show=True),
         Binding("ctrl+t", "toggle_theme", "(T)heme", show=True),
+        Binding("f2", "open_settings", "Settings", show=True),
     ]
 
     def __init__(self, identity, storage, network):
@@ -343,11 +760,17 @@ class RedoubtApp(App):
         network.on_ack = self.on_ack
 
     def compose(self) -> ComposeResult:
-        """Compose full UI (sidebar, chat area, textbox and panels"""
-        header = Header(show_clock=True)
-        header.can_focus = False
+        """Compose full UI (topbar with settings, sidebar, chat area, textbox and panels"""
 
-        yield header
+        with Horizontal(id="topbar"):
+            settings_btn = Button("☰Settings", id="settings_btn")
+            settings_btn.can_focus = False  # keep focus on the textbox
+            yield settings_btn
+
+            header = Header(show_clock=True, icon="")
+            header.can_focus = False
+            yield header
+
         with Horizontal():
 
             with Vertical(id="sidebar"):
@@ -361,8 +784,6 @@ class RedoubtApp(App):
                     yield Static(f"0/{proto.MAX_MESSAGE_BYTES}", id="byte_counter")
 
                 yield Static("", id="statusbar")
-
-        yield Footer()
 
     def on_mount(self):
         """Textual function. Things to load on mount"""
@@ -405,6 +826,67 @@ class RedoubtApp(App):
         """Textual action to quit the app | ctrl+Q"""
         self.push_screen(ConfirmQuitScreen(), self.quit_confirmed)
 
+    def action_open_settings(self):
+        """Textual action to open the settings dropdown | F2 or click on the top-left button"""
+        if len(self.screen_stack) > 1:  # a popup is already open
+            return
+        self.push_screen(SettingsMenuScreen(), self.settings_menu_chosen)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Top-left settings button"""
+        if event.button.id == "settings_btn":
+            event.stop()
+            self.action_open_settings()
+
+
+    ## Settings menu
+
+    def settings_menu_chosen(self, choice):
+        """Open the screen related to the chosen dropdown option"""
+        if choice == "about":
+            self.push_screen(AboutScreen())
+        elif choice == "show_card":
+            self.push_screen(ShowCardScreen(self.identity))
+        elif choice == "contacts":
+            self.push_screen(ContactListScreen(self.storage.list_contacts()))
+        elif choice == "add":
+            self.push_screen(AddContactScreen(self.storage, self.identity), self.contact_added)
+
+    def contact_added(self, name):
+        """Add-contact form closed: if a contact was added, refresh the sidebar"""
+        if not name:
+            return
+        self.reload_contacts()
+        self.query_one("#statusbar", Static).update(f"Contact {escape(name)} added")
+
+    def revoke_contact(self, fingerprint):
+        """Revoke a contact: delete it (with messages/outbox), then kill its live session and in-RAM ratchet state"""
+        contact = self.storage.get_contact(fingerprint)
+        name = contact[1] if contact else fingerprint[:16]
+
+        # 1. database first: from now on no handshake can succeed for this contact
+        self.storage.delete_contact(fingerprint)
+
+        # 2. network side: close session, wipe ratchet, forget pending state
+        drop = getattr(self.network, "drop_contact", None)
+        if callable(drop):
+            try:
+                drop(fingerprint)
+            except Exception:
+                logger.exception("network.drop_contact failed")
+        else:
+            logger.warning("network.drop_contact() not available: live session (if any) stays open until restart")
+
+        # 2b. delete again: removes anything stored by in-flight threads between step 1 and step 2
+        self.storage.delete_contact(fingerprint)
+
+        # 3. update UI
+        if self.current_contact == fingerprint:
+            self.current_contact = None
+            self.query_one("#chatlog", RichLog).clear()
+        self.reload_contacts()
+        self.query_one("#statusbar", Static).update(f"Contact {escape(name)} revoked")
+
 
     ## Theme
 
@@ -443,6 +925,7 @@ class RedoubtApp(App):
     def reload_contacts(self):
         """Reload contacts on sidebar"""
         lv = self.query_one("#contacts", ListView)
+        old_status = {fp: item.status for fp, item in self._items.items()}    # reload must not reset online dots
         lv.clear()
         self._items.clear()
 
@@ -460,6 +943,7 @@ class RedoubtApp(App):
             item = ContactItem(
                 fp,
                 name,
+                status=old_status.get(fp, "offline"),
                 preview=preview,
                 preview_time=preview_time,
                 unread_count=unread_count,
@@ -467,6 +951,15 @@ class RedoubtApp(App):
 
             self._items[fp] = item
             lv.append(item)
+
+        if self.current_contact in self._items:
+            self.call_after_refresh(self.restore_selection)
+
+    def restore_selection(self):
+        """Re-highlight the open chat in the sidebar after a reload"""
+        if self.current_contact in self._items:
+            lv = self.query_one("#contacts", ListView)
+            lv.index = list(self._items).index(self.current_contact)
 
     def on_list_view_selected(self, event: ListView.Selected):
         """To call when a contact is selected. Updates current contact, marks all messages as read and focuses on textbox"""
@@ -706,7 +1199,7 @@ class RedoubtApp(App):
         """Define behaviour for a network status message update"""
         if not self.is_running:
             return
-        
+
         ts = datetime.now().strftime("%H:%M:%S")
 
         self.query_one("#statusbar", Static).update(f"[{ts}] {fingerprint[:16]}... [dim]{escape(message)}[/]")

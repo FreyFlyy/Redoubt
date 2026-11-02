@@ -219,7 +219,7 @@ class NetworkManager:
             if existing is not None and existing.alive:
                 return existing
             # if no other session is alive, raise exception
-            raise RuntimeError(f"Session for {fp[:16]}... discarded from tie-break, but no other session can be found")
+            raise RuntimeError(f"Session for {fp[:16]}... discarded (tie-break or contact revoked), and no other session can be found")
 
         self._flush_if_online(fp)   # flush outbox if online
         threading.Thread(target=self._read_loop, args=(session, ip), daemon=True).start()
@@ -677,8 +677,13 @@ class NetworkManager:
             # Get old session
             old = self.sessions.get(fp)
             old_is_alive = old is not None and old is not new_session and old.alive
+            # If the contact was revoked while the handshake was running: never install (pairs with drop_contact())
+            if self.storage.get_contact(fp) is None:
+                to_close = new_session
+                new_was_discarded = True
+                logger.warning(f"Contact {fp[:16]}... no longer in contacts (revoked?), discarding new session")
             # If alive and don't need another session
-            if old_is_alive and not new_is_preferred:
+            elif old_is_alive and not new_is_preferred:
                 to_close = new_session
                 new_was_discarded = True
             # If not alive and doesn't allow anymore sessions (cap)
@@ -704,6 +709,44 @@ class NetworkManager:
                 logger.exception("OS error in _install_session: to_close.sock.close()")
 
         return new_was_discarded
+
+
+    ## Contact revocation
+
+    def drop_contact(self, contact_fingerprint: str):
+        """
+        Forget a contact at runtime: kill its live session, wipe its Double Ratchet and discard its in-RAM state.
+        Meant to be called by the UI AFTER the contact was deleted from storage (delete -> drop -> delete again):
+        once the row is gone no handshake can succeed anymore (see _install_session), and the second delete
+        removes whatever in-flight threads stored between the first delete and this call.
+        Safe to call from any thread. Never blocks for long (socket timeout capped at 1s).
+        """
+        fp = contact_fingerprint
+
+        with self.sessions_lock:
+            session = self.sessions.pop(fp, None)
+
+        if session is not None:
+            session.alive = False
+            session.destroy()   # zero ratchet key material (best-effort)
+            try:    # best-effort goodbye, short timeout: we may be on the UI thread
+                session.sock.settimeout(1.0)
+                session.send(proto.add_padding(proto.build_close(self.identity.fingerprint)))
+            except OSError:
+                logger.warning(f"Could not send CLOSE to revoked contact {fp[:16]}...")
+            try:    # also unblocks the session's _read_loop thread, which then exits by itself
+                session.sock.close()
+            except OSError:
+                logger.warning(f"OS error closing socket of revoked contact {fp[:16]}...")
+
+        with self.pending_acks_lock:    # no more retransmissions for this contact
+            for mid in [m for m, e in self.pending_acks.items() if e["contact_fingerprint"] == fp]:
+                del self.pending_acks[mid]
+
+        with self._flush_locks_guard:
+            self._flush_locks.pop(fp, None)
+
+        self.peer_presence.pop(fp, None)
 
 
     ## Read & inbound

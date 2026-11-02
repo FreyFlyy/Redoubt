@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from redoubt import app, crypto, identity as idmod, network, protocol as proto, storage as st
+from redoubt import app, crypto, identity as idmod, network, protocol as proto, storage as st, ui
 
 from test_network_integration import Peer, free_port, wait_for, _silent_server, _add_silent_contact
 
@@ -153,6 +153,97 @@ def test_remove_contact_refusals_keep_the_contact(case, store, monkeypatch, caps
         feed(monkeypatch, fp, pub, "no")
     app.cmd_remove_contact(store)
     assert store.get_contact(fp) is not None
+
+
+## ---------------------------------------------------------------- Textual UI wiring: settings menu + theme
+
+class _FakeNetwork:
+    """Stand-in NetworkManager: RedoubtApp only assigns its callbacks on the network object"""
+    on_message = None
+    on_status = None
+    on_ack = None
+    on_statusbar_message = None
+
+
+def _make_app(ident, store):
+    return ui.RedoubtApp(ident, store, _FakeNetwork())
+
+
+def _patch_push_screen(monkeypatch, pushed):
+    """Record push_screen calls instead of touching the real Textual screen stack"""
+
+    def fake_push(self, screen, callback=None, **kwargs):
+        pushed.append((screen, callback))
+        return None
+
+    monkeypatch.setattr(ui.RedoubtApp, "push_screen", fake_push)
+
+
+def test_open_settings_pushes_the_dropdown_when_no_popup_is_open(ident, store, monkeypatch):
+    app = _make_app(ident, store)
+    monkeypatch.setattr(ui.RedoubtApp, "screen_stack", property(lambda self: []))    # no popup open
+    pushed = []
+    _patch_push_screen(monkeypatch, pushed)
+    app.action_open_settings()
+    assert len(pushed) == 1
+    screen, callback = pushed[0]
+    assert isinstance(screen, ui.SettingsMenuScreen)
+    assert callback == app.settings_menu_chosen
+
+
+def test_open_settings_is_a_no_op_when_a_popup_is_open(ident, store, monkeypatch):
+    app = _make_app(ident, store)
+    monkeypatch.setattr(ui.RedoubtApp, "screen_stack", property(lambda self: [object(), object()]))    # popup already open
+    pushed = []
+    _patch_push_screen(monkeypatch, pushed)
+    app.action_open_settings()
+    assert pushed == []
+
+
+@pytest.mark.parametrize("choice, expected_screen, expect_callback", [
+    ("about", ui.AboutScreen, False),
+    ("show_card", ui.ShowCardScreen, False),
+    ("contacts", ui.ContactListScreen, False),
+    ("add", ui.AddContactScreen, True),
+])
+def test_settings_menu_chosen_opens_the_expected_screen(ident, store, monkeypatch, choice, expected_screen, expect_callback):
+    app = _make_app(ident, store)
+    pushed = []
+    _patch_push_screen(monkeypatch, pushed)
+    app.settings_menu_chosen(choice)
+    assert len(pushed) == 1
+    screen, callback = pushed[0]
+    assert isinstance(screen, expected_screen)
+    assert (callback == app.contact_added) is expect_callback
+
+
+def test_settings_menu_chosen_ignores_unknown_choices(ident, store, monkeypatch):
+    app = _make_app(ident, store)
+    pushed = []
+    _patch_push_screen(monkeypatch, pushed)
+    app.settings_menu_chosen("not-a-real-option")
+    assert pushed == []
+
+
+def test_redoubt_app_cycles_through_the_registered_themes(ident, store):
+    app = _make_app(ident, store)
+    for theme in ui.RedoubtApp.THEMES:
+        app.register_theme(theme)
+    app.theme = "python"
+    app.update_theme_indicator()
+    assert app.theme == "python" and app.sub_title == "Python"
+    for expected in ui.RedoubtApp.THEME_ORDER[1:]:
+        app.action_toggle_theme()
+        assert app.theme == expected and app.sub_title == expected.capitalize()
+    app.action_toggle_theme()    # back to the first theme
+    assert app.theme == "python" and app.sub_title == "Python"
+
+
+def test_load_and_save_settings_roundtrip():
+    ui.save_settings({"theme": "nord"})
+    assert ui.load_settings() == {"theme": "nord"}
+    ui.save_settings({})
+    assert ui.load_settings() == {}
 
 
 ## ---------------------------------------------------------------- entry point
