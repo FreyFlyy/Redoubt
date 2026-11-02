@@ -99,7 +99,17 @@ For the complete analysis, consult [ARCHITECTURE.md](./ARCHITECTURE.md).
 > Do not use it for data whose exposure would cause harm.
 > Known limits: [Security model](#security-model) · Report a vulnerability: [SECURITY.md](./SECURITY.md)
 
-### AppImage
+### Simple installation
+
+The installer downloads the AppImage and its logo into `~/.redoubt`, then creates or updates the desktop entry in `~/.local/share/applications`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FreyFlyy/Redoubt/main/packaging/install.sh | sh
+```
+
+You can inspect the script before at [this](https://raw.githubusercontent.com/FreyFlyy/Redoubt/main/packaging/install.sh) link
+
+### AppImage (manual)
 
 Redoubt is distributed as a standalone AppImage for Linux.
 
@@ -114,73 +124,9 @@ chmod +x Redoubt-2.1.0-*.AppImage
 
 **Note:** AppImage compatibility depends on the host system's architecture and available system libraries. Some distributions may require FUSE support.
 
-### Post-installation
+### Building from source
 
-The following steps integrate Redoubt into your desktop environment, allowing it to appear in the application menu.
-
-#### 1. Create the application directory
-
-```bash
-mkdir -p ~/.redoubt
-mkdir -p ~/.local/share/applications
-```
-
-#### 2. Copy the AppImage and icon
-
-Copy the AppImage matching your system architecture and the application icon into `~/.redoubt`:
-
-```bash
-cp Redoubt-2.1.0-x86_64.AppImage ~/.redoubt/  # x86_64
-
-cp ./packaging/redoubt.png ~/.redoubt/
-```
-
-#### 3. Make the AppImage executable
-
-```bash
-chmod +x ~/.redoubt/Redoubt-2.1.0-*.AppImage
-```
-
-#### 4. Install the desktop entry
-
-```bash
-nano ~/.local/share/applications/Redoubt.desktop
-```
-
-Configure the `Exec` and `Icon` fields using the absolute paths to your files.
-
-Example for x86_64:
-
-```ini
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Redoubt
-Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
-Exec=/home/USERNAME/.redoubt/Redoubt-2.1.0-x86_64.AppImage
-Icon=/home/USERNAME/.redoubt/redoubt.png
-Terminal=true
-Categories=Network
-StartupNotify=false
-```
-
-Replace `USERNAME` with your Linux username.
-
-**Important:** Desktop entries require absolute paths. Do not use `~` in the `Exec` or `Icon` fields.
-
-#### 5. Update the application database
-
-```bash
-update-desktop-database ~/.local/share/applications
-```
-
-The desktop environment should now recognize Redoubt in its application menu. If it does not appear immediately, refresh the application menu or log out and back in.
-
----
-
-## Building from source
-
-### Requirements
+#### Requirements
 
 - Linux system.
 - Python 3.12 or newer.
@@ -189,7 +135,7 @@ The desktop environment should now recognize Redoubt in its application menu. If
 - AppImageKit's `appimagetool`.
 - Native development libraries required by SQLCipher and Python dependencies.
 
-### 1. Install system dependencies
+#### 1. Install system dependencies
 
 **Debian / Ubuntu**
 
@@ -252,7 +198,7 @@ Ensure that the installed Python version is at least 3.12:
 python --version
 ```
 
-### 2. Install appimagetool
+#### 2. Install appimagetool
 
 `appimagetool` is required to package the generated AppDir into an AppImage.
 
@@ -271,14 +217,14 @@ file /usr/local/bin/appimagetool
 
 If AppImage execution fails because FUSE is unavailable, install the appropriate FUSE compatibility package or use the AppImage extraction mode supported by the runtime.
 
-### 3. Clone the repository
+#### 3. Clone the repository
 
 ```bash
 git clone https://github.com/FreyFlyy/Redoubt.git
 cd Redoubt
 ```
 
-### 4. Build the AppImage
+#### 4. Build the AppImage
 
 Build for the current machine's architecture.
 
