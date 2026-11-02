@@ -140,6 +140,18 @@ if (-not (Test-Path $IconPng) -or (Get-Item $IconPng).Length -eq 0) {
 
 # Convert PNG to ICO
 
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public class NativeMethods {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyIcon(IntPtr hIcon);
+}
+"@
+
+# Convert PNG to ICO
+
 Add-Type -AssemblyName System.Drawing
 
 $Bitmap = [System.Drawing.Bitmap]::FromFile($IconPng)
@@ -161,11 +173,11 @@ try {
             }
         }
         finally {
-            $Icon.Dispose()
+            # Do not dispose the Icon: it wraps the native handle.
         }
     }
     finally {
-        [System.Runtime.InteropServices.Marshal]::DestroyIcon($IconHandle)
+        [NativeMethods]::DestroyIcon($IconHandle) | Out-Null
     }
 }
 finally {
