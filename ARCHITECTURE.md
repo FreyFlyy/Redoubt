@@ -53,7 +53,7 @@ Wire keys, root keys and chain keys use distinct HKDF/HMAC `info` labels (domain
 
 ## Trust model (contacts)
 
-Adding a contact: name, IP, base64 public key and claimed fingerprint. Automatic verification that `SHA-256(pubkey) == fingerprint` before saving, with explicit manual confirmation from the terminal.
+Adding a contact: name, IP, base64 public key and claimed fingerprint. Automatic verification that `SHA-256(pubkey) == fingerprint` before saving, through the shared `contact_validation.py` used by both the CLI and the UI form. The CLI additionally asks for an explicit yes/no confirmation before saving.
 
 There is no separate "verified/unverified" state per contact: a contact is either present in the list (added after a successful fingerprint verification) or absent.
 
@@ -64,7 +64,7 @@ Connections, in both directions, require the peer to already be a saved contact:
 | Outbound | Authenticated handshake against the static key saved for that contact. If the peer responds with a fingerprint different from the expected one, the connection is dropped (`PeerMismatch`). |
 | Inbound | The sender's IP must match at least one saved contact's IP, otherwise the handshake fails immediately. If several contacts share the same IP, every matching static key is tried against the incoming HELLO (`_establish_wire_key_candidates`); the fingerprint claimed inside the HELLO payload is then checked against the fingerprint of the specific candidate whose key actually decrypted it (`_read_packet_multi_key` → `_do_handshake_inbound`). A mismatch is a `PeerMismatch`, and no session is created. |
 
-Revocation: `--remove-contact` requires the public key as proof of possession (not just the name), then deletes the contact along with its history and outbox.
+Revocation: from the UI (`Settings` → `Contact list` → `Revoke`, with a confirmation dialog) or via `--remove-contact` (which additionally requires the public key as proof of possession, not just the name). Both paths delete the contact along with its history and outbox. The UI path also calls `NetworkManager.drop_contact()`: it closes the live session, wipes the Double Ratchet state, drops pending ACKs and in-RAM presence, and any handshake still in flight for that contact is discarded (`_install_session`).
 
 ---
 

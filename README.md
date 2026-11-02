@@ -47,6 +47,7 @@ Redoubt separates its functionality into independent modules:
 | `crypto.py` | Cryptographic primitives and key derivation |
 | `ratchet.py` | Double Ratchet: session key derivation and forward-secure message keys |
 | `identity.py` | Local identity and vault management |
+| `contact_validation.py` | Contact input validation shared by the CLI and the UI form |
 | `network.py` | Peer-to-peer networking |
 | `protocol.py` | Communication protocol and packet handling |
 | `storage.py` | Encrypted persistent storage |
@@ -73,7 +74,7 @@ Redoubt focuses on protecting communications and locally stored information agai
 | Unauthorized peer authentication | Static public-key authentication requires knowledge of the expected peer key. |
 | Offline database inspection | SQLCipher database encryption and additional field-level encryption. |
 | Offline identity theft | Identity material is protected by a passphrase-derived vault key using Argon2id. |
-| Compromised contacts | Explicit contact revocation with proof of possession of the corresponding public key. |
+| Compromised contacts | Explicit contact revocation from the UI, or with public-key proof of possession via `--remove-contact`. |
 
 ### Known limitations
 
@@ -302,7 +303,7 @@ The build script automatically:
 5. Creates the AppDir structure.
 6. Packages the application using `appimagetool`.
 
-The resulting AppImage is placed in `/`.
+The resulting AppImage is placed in the repository root.
 
 **Important:** Build each architecture natively on a machine with the corresponding architecture. Building on x86_64 does not automatically produce an ARM64 executable, and vice versa.
 
@@ -330,10 +331,22 @@ Share your public identity information with the intended contact through an inde
 
 ### Settings menu (top left)
 
-- **About**: shows author, version and version
-- **Show card**: shows your PubKey adn Fingerprint (SHA256 of PubKey, as a double check)
-- **Contact list**: Shows, for every saved contact, their name, IP, PubKey and Fingerprint, with the option to remove/revoke them, deleting every message and the possibility to talk again (needs to be added again)
-- **Add contact**: Insert name, IP, PubKey and Fingerprint of a contact to add, and it adds the contact into the database
+- **About**: shows author, version and license.
+- **Show card**: shows your PubKey and Fingerprint (SHA-256 of PubKey, as a double check).
+- **Contact list**: shows, for every saved contact, name, IP, PubKey and Fingerprint, with the option to revoke them, deleting every message (the contact must be added again to chat).
+- **Add contact**: insert name, IP, PubKey and Fingerprint to add a contact to the database.
+
+### Contact management from the CLI (legacy)
+
+The same contact operations are still available from the command line:
+
+```bash
+./Redoubt-2.1.0-*.AppImage --add-contact
+./Redoubt-2.1.0-*.AppImage --list-contacts
+./Redoubt-2.1.0-*.AppImage --remove-contact
+```
+
+`--remove-contact` also requires the contact's public key as proof of possession.
 
 **Important:** Verify contact fingerprints independently before establishing trust. Never assume that receiving a public key automatically authenticates its owner.
 
