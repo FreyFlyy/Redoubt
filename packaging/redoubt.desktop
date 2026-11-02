@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Redoubt
+Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
+Exec=AppRun
+Icon=redoubt
+Terminal=true
+Categories=Network;InstantMessaging;
