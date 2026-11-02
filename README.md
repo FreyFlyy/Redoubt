@@ -3,14 +3,13 @@
 <p align="center">
   <img src="https://img.shields.io/github/v/release/FreyFlyy/Redoubt?style=flat&color=green">
   <img src="https://img.shields.io/badge/platform-Linux-FCC624?style=flat&logo=linux&logoColor=black">
+  <img src="https://img.shields.io/badge/platform-Windows-0078D6?style=flat&logo=windows&logoColor=white">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat&logo=python&logoColor=white">
   <img src="https://img.shields.io/github/license/FreyFlyy/Redoubt?style=flat">
 </p>
 
 <p align="center">
-  <a href="https://github.com/FreyFlyy/Redoubt/releases/latest">
-    <img src="https://img.shields.io/badge/Download-AppImage-7B2D8E?style=for-the-badge&logo=linux&logoColor=white" alt="Download AppImage">
-  </a>
+  <img src="https://img.shields.io/badge/Download-GitHub%20Releases-7B2D8E?style=for-the-badge&logo=github&logoColor=white" alt="Download GitHub Releases">
 </p>
 
 ![Screenshot](./Screenshot.png)
@@ -99,32 +98,58 @@ For the complete analysis, consult [ARCHITECTURE.md](./ARCHITECTURE.md).
 > Do not use it for data whose exposure would cause harm.
 > Known limits: [Security model](#security-model) · Report a vulnerability: [SECURITY.md](./SECURITY.md)
 
-### Simple installation
+### Windows
 
-The installer downloads the AppImage and its logo into `~/.redoubt`, then creates or updates the desktop entry in `~/.local/share/applications`.
+Open PowerShell and run:
+
+```powershell
+irm https://raw.githubusercontent.com/FreyFlyy/Redoubt/main/packaging/install.ps1 | iex
+```
+
+The installer automatically:
+- Downloads the latest Windows release.
+- Installs Redoubt in `%USERPROFILE%\.redoubt`.
+- Installs the application icon and MesloLGS Nerd Font.
+- Creates Desktop and Start Menu shortcuts.
+- Checks for Windows Terminal.
+
+### Linux
+
+Run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FreyFlyy/Redoubt/main/packaging/install.sh | sh
 ```
 
-You can inspect the script before at [this](https://raw.githubusercontent.com/FreyFlyy/Redoubt/main/packaging/install.sh) link
+The installer downloads the latest AppImage and its logo into `~/.redoubt`, then creates the desktop entry in `~/.local/share/applications`.
 
-### AppImage (manual)
+### Manual installation
 
-Redoubt is distributed as a standalone AppImage for Linux.
+#### Windows
 
-AppImages bundle the application and its Python dependencies, allowing Redoubt to run without manually installing Python packages or configuring a virtual environment.
+Download the latest Windows ZIP archive from [GitHub Releases](https://github.com/FreyFlyy/Redoubt/releases).
 
-1. Download the latest AppImage from [GitHub Releases](https://github.com/FreyFlyy/Redoubt/releases) (NOTE: only x86_64 architecture is compiled, follow [Building from source](#building-from-source) for other systems).
-2. Make the file executable:
+Extract the archive and run `Redoubt.exe`.
+
+#### Linux
+
+Download the latest AppImage from [GitHub Releases](https://github.com/FreyFlyy/Redoubt/releases).
+
+Make it executable:
 
 ```bash
-chmod +x Redoubt-2.1.0-*.AppImage
+chmod +x Redoubt-*.AppImage
+```
+
+Run it:
+
+```bash
+./Redoubt-*.AppImage
 ```
 
 **Note:** AppImage compatibility depends on the host system's architecture and available system libraries. Some distributions may require FUSE support.
 
-### Building from source
+### Building from source (Linux)
 
 #### Requirements
 
@@ -255,26 +280,6 @@ The resulting AppImage is placed in the repository root.
 
 ---
 
-## Usage
-
-Launch Redoubt:
-
-```bash
-./Redoubt-2.1.0-*.AppImage
-```
-
-On first launch, Redoubt will request a vault passphrase and initialize a local identity.
-
-### Identity
-
-Display your identity card:
-
-```bash
-./Redoubt-2.1.0-*.AppImage --show-card
-```
-
-Share your public identity information with the intended contact through an independent channel.
-
 ### Settings menu (top left)
 
 - **About**: shows author, version and license.
@@ -282,7 +287,7 @@ Share your public identity information with the intended contact through an inde
 - **Contact list**: shows, for every saved contact, name, IP, PubKey and Fingerprint, with the option to revoke them, deleting every message (the contact must be added again to chat).
 - **Add contact**: insert name, IP, PubKey and Fingerprint to add a contact to the database.
 
-### Contact management from the CLI (legacy)
+### Contact management from the CLI (Linux legacy)
 
 The same contact operations are still available from the command line:
 
