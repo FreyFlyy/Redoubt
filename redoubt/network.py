@@ -5,6 +5,7 @@ Network module for Redoubt
 """
 
 import os
+import sys
 import time
 import json
 import struct
@@ -193,7 +194,7 @@ class NetworkManager:
             sock.connect((ip, port))
         except Exception as e:
             sock.close()
-            if "refused" in str(e): # err 111 connection refused (normal when offline)
+            if isinstance(e, ConnectionRefusedError):   # refused = peer offline (normal); type check, not str(): Windows messages are localized
                 pass    # do nothing
             else:
                 self.on_statusbar_message(fp, f"Connection to {ip}:{port} failed: {e}")
@@ -233,7 +234,11 @@ class NetworkManager:
         """Start socket listener on a specific port and thread"""
         self.listen_port = port
         self._listener_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sys.platform == "win32":
+            # On Windows SO_REUSEADDR lets ANOTHER process bind the same port (traffic hijack); exclusive bind is the safe equivalent
+            self._listener_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            self._listener_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listener_sock.bind(("0.0.0.0", port))
         self._listener_sock.listen(20)
         self._listener_sock.settimeout(1.0)
@@ -250,6 +255,8 @@ class NetworkManager:
             try:    # try accepting any connection
                 conn, addr = self._listener_sock.accept()
             except TimeoutError:  # no connection tried. Not a problem, restart
+                continue
+            except (ConnectionAbortedError, ConnectionResetError):  # peer gone before accept(): not fatal (common on Windows, ECONNABORTED on Linux)
                 continue
             except OSError:
                 logger.exception("OS error in _listen_loop: conn, addr = self._listener_sock.accept()")

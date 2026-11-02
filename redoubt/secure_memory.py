@@ -7,9 +7,14 @@ Secure memory module for Redoubt
 import sys
 import ctypes
 import ctypes.util
-import resource
 from . import logger as logger_mod
 logger = logger_mod.get_logger(__name__)
+
+_IS_WINDOWS = sys.platform == "win32"
+if not _IS_WINDOWS:
+    import resource     # POSIX only: the module does not exist on Windows
+else:
+    resource = None
 
 
 ## Get libc for Linux (better memory management)
@@ -23,16 +28,87 @@ if sys.platform.startswith("linux"):
         _libc = None
 
 
+## Get kernel32 for Windows (VirtualLock / VirtualUnlock)
+
+_k32 = None
+if _IS_WINDOWS:
+    try:
+        from ctypes import wintypes
+        _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        _k32.VirtualLock.argtypes = [wintypes.LPVOID, ctypes.c_size_t]
+        _k32.VirtualLock.restype = wintypes.BOOL
+        _k32.VirtualUnlock.argtypes = [wintypes.LPVOID, ctypes.c_size_t]
+        _k32.VirtualUnlock.restype = wintypes.BOOL
+        _k32.GetCurrentProcess.argtypes = []
+        _k32.GetCurrentProcess.restype = wintypes.HANDLE
+        _k32.GetProcessWorkingSetSize.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
+        _k32.GetProcessWorkingSetSize.restype = wintypes.BOOL
+        _k32.SetProcessWorkingSetSize.argtypes = [wintypes.HANDLE, ctypes.c_size_t, ctypes.c_size_t]
+        _k32.SetProcessWorkingSetSize.restype = wintypes.BOOL
+        _k32.SetErrorMode.argtypes = [wintypes.UINT]
+        _k32.SetErrorMode.restype = wintypes.UINT
+    except (OSError, AttributeError):
+        _k32 = None
+
+# VirtualLock counts every locked page against the process MINIMUM working set (default is tiny): raise it once, lazily
+_WS_EXTRA_BYTES = 4 * 1024 * 1024
+_ws_raised = False
+
+def _raise_working_set_quota():
+    """Windows only: grow the working set (min and max) by _WS_EXTRA_BYTES so that VirtualLock has room. Never shrinks"""
+    global _ws_raised
+    if _ws_raised or _k32 is None:
+        return
+    _ws_raised = True   # try only once
+    proc = _k32.GetCurrentProcess()
+    ws_min, ws_max = ctypes.c_size_t(0), ctypes.c_size_t(0)
+    if not _k32.GetProcessWorkingSetSize(proc, ctypes.byref(ws_min), ctypes.byref(ws_max)):
+        logger.warning(f"GetProcessWorkingSetSize failed (error {ctypes.get_last_error()}): VirtualLock may fail")
+        return
+    if not _k32.SetProcessWorkingSetSize(proc, ws_min.value + _WS_EXTRA_BYTES, ws_max.value + _WS_EXTRA_BYTES):
+        logger.warning(f"SetProcessWorkingSetSize failed (error {ctypes.get_last_error()}): VirtualLock may fail")
+
+
+## Platform-neutral page locking
+
+def _locking_supported() -> bool:
+    """True if this platform has a page-locking backend"""
+    return _libc is not None or _k32 is not None
+
+def _lock_memory(addr: int, size: int):
+    """Pin [addr, addr+size) in RAM. Returns (ok, error_code)"""
+    if _k32 is not None:
+        _raise_working_set_quota()
+        ok = bool(_k32.VirtualLock(ctypes.c_void_p(addr), ctypes.c_size_t(size)))
+        return ok, (0 if ok else ctypes.get_last_error())
+    rc = _libc.mlock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+    return rc == 0, (0 if rc == 0 else ctypes.get_errno())
+
+def _unlock_memory(addr: int, size: int):
+    """Release the pin made by _lock_memory"""
+    if _k32 is not None:
+        _k32.VirtualUnlock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+    elif _libc is not None:
+        _libc.munlock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+
+
 ## Disable dumps on supported OSs
 
 def disable_core_dumps():
     """To call ASAP in app.py, disables potentially information-leaking dumps"""
-    if not hasattr(resource, "RLIMIT_CORE"):
-        return  # platform without support (e.g. Windows)
+    if _IS_WINDOWS:
+        # No RLIMIT_CORE on Windows. SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX only suppresses the crash dialog/report
+        # of this process: it does NOT guarantee that WER LocalDumps (registry-configured, system-wide) won't write a dump
+        if _k32 is not None:
+            _k32.SetErrorMode(0x0001 | 0x0002)
+        logger.info("Core dumps cannot be disabled on Windows (best-effort only: crash UI/report suppressed)")
+        return
+    if resource is None or not hasattr(resource, "RLIMIT_CORE"):
+        return  # platform without support
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    except (ValueError, OSError):
-        logger.warning(f"Cannot disable core dumps (RLIMIT_CORE): {RuntimeWarning}")
+    except (ValueError, OSError) as e:
+        logger.warning(f"Cannot disable core dumps (RLIMIT_CORE): {e}")
 
 
 def zero_bytearray(buf: bytearray):
@@ -76,13 +152,11 @@ class SecureBuffer:
 
     def _mlock(self):
         """Lock all info in RAM and blocks swap on disk (leakage)"""
-        if _libc is None or self._size == 0:
+        if not _locking_supported() or self._size == 0:
             return
-        rc = _libc.mlock(ctypes.c_void_p(self._addr()), ctypes.c_size_t(self._size))
-        self._locked = (rc == 0)
+        self._locked, err = _lock_memory(self._addr(), self._size)
         if not self._locked:
-            errno = ctypes.get_errno()
-            logger.exception(f"mlock() failed (errno {errno}): this info CAN finish on disk with swap: {RuntimeWarning}")
+            logger.warning(f"Memory lock failed (OS error {err}): this info CAN finish on disk with swap")
 
     def zero(self):
         """Zeroing of a piece of information in RAM"""
@@ -91,8 +165,8 @@ class SecureBuffer:
         for i in range(self._size):
             self._buf[i] = 0
         self._zeroed = True
-        if self._locked and _libc is not None:
-            _libc.munlock(ctypes.c_void_p(self._addr()), ctypes.c_size_t(self._size))
+        if self._locked:
+            _unlock_memory(self._addr(), self._size)
             self._locked = False
 
     def view(self) -> bytearray:

@@ -39,7 +39,7 @@ def validate_new_contact(storage, ident, name, ip_input, pubkey_b64, fingerprint
 
     try:
         addr = ipaddress.ip_address(ip_input)
-        if addr.is_unspecified or addr.is_multicast:
+        if addr.version != 4 or addr.is_unspecified or addr.is_multicast:   # the listener/connector are IPv4-only (AF_INET)
             raise ValueError
         ip = str(addr)  # canonical form, so it matches the source IP seen by the listener
     except ValueError:
