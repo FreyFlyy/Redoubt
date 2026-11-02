@@ -152,7 +152,7 @@ Example for x86_64:
 
 ```ini
 [Desktop Entry]
-Version=2.0.0
+Version=1.0
 Type=Application
 Name=Redoubt
 Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
