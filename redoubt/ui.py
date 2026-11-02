@@ -304,7 +304,7 @@ class AboutScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         """Compose the popup"""
         with Vertical(id="dialog"):
-            yield Label(f"Francesco Scolz\nRedoubt {__version__}\nAGPL 3.0")
+            yield Label(f"👤 Francesco Scolz\nRedoubt {__version__}\n📄 AGPL 3.0")
             with Horizontal(id="buttons_row"):
                 yield Button("Close", id="close", variant="primary")
 
