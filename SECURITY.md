@@ -8,7 +8,7 @@ For what the project does and does not protect against, read the [Security model
 
 ## Supported versions
 
-Only the latest release receives security fixes (currently v2.0.0)
+Only the latest release receives security fixes (currently v2.1.0)
 
 ---
 

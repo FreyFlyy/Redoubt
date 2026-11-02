@@ -763,7 +763,7 @@ class RedoubtApp(App):
         """Compose full UI (topbar with settings, sidebar, chat area, textbox and panels"""
 
         with Horizontal(id="topbar"):
-            settings_btn = Button("☰Settings", id="settings_btn")
+            settings_btn = Button("☰ Settings", id="settings_btn")
             settings_btn.can_focus = False  # keep focus on the textbox
             yield settings_btn
 

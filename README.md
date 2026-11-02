@@ -108,7 +108,7 @@ AppImages bundle the application and its Python dependencies, allowing Redoubt t
 2. Make the file executable:
 
 ```bash
-chmod +x Redoubt-2.0.0-*.AppImage
+chmod +x Redoubt-2.1.0-*.AppImage
 ```
 
 **Note:** AppImage compatibility depends on the host system's architecture and available system libraries. Some distributions may require FUSE support.
@@ -129,7 +129,7 @@ mkdir -p ~/.local/share/applications
 Copy the AppImage matching your system architecture and the application icon into `~/.redoubt`:
 
 ```bash
-cp Redoubt-2.0.0-x86_64.AppImage ~/.redoubt/  # x86_64
+cp Redoubt-2.1.0-x86_64.AppImage ~/.redoubt/  # x86_64
 
 cp ./packaging/redoubt.png ~/.redoubt/
 ```
@@ -137,7 +137,7 @@ cp ./packaging/redoubt.png ~/.redoubt/
 #### 3. Make the AppImage executable
 
 ```bash
-chmod +x ~/.redoubt/Redoubt-2.0.0-*.AppImage
+chmod +x ~/.redoubt/Redoubt-2.1.0-*.AppImage
 ```
 
 #### 4. Install the desktop entry
@@ -156,7 +156,7 @@ Version=1.0
 Type=Application
 Name=Redoubt
 Comment=A peer-to-peer messaging app with end-to-end message encryption and hardened client runtime
-Exec=/home/USERNAME/.redoubt/Redoubt-2.0.0-x86_64.AppImage
+Exec=/home/USERNAME/.redoubt/Redoubt-2.1.0-x86_64.AppImage
 Icon=/home/USERNAME/.redoubt/redoubt.png
 Terminal=true
 Categories=Network
@@ -313,7 +313,7 @@ The resulting AppImage is placed in `/`.
 Launch Redoubt:
 
 ```bash
-./Redoubt-2.0.0-*.AppImage
+./Redoubt-2.1.0-*.AppImage
 ```
 
 On first launch, Redoubt will request a vault passphrase and initialize a local identity.
@@ -323,30 +323,17 @@ On first launch, Redoubt will request a vault passphrase and initialize a local 
 Display your identity card:
 
 ```bash
-./Redoubt-2.0.0-*.AppImage --show-card
+./Redoubt-2.1.0-*.AppImage --show-card
 ```
 
 Share your public identity information with the intended contact through an independent channel.
 
-### Contact management
+### Settings menu (top left)
 
-Add a contact:
-
-```bash
-./Redoubt-2.0.0-*.AppImage --add-contact
-```
-
-List contacts:
-
-```bash
-./Redoubt-2.0.0-*.AppImage --list-contacts
-```
-
-Remove a contact:
-
-```bash
-./Redoubt-2.0.0-*.AppImage --remove-contact
-```
+- **About**: shows author, version and version
+- **Show card**: shows your PubKey adn Fingerprint (SHA256 of PubKey, as a double check)
+- **Contact list**: Shows, for every saved contact, their name, IP, PubKey and Fingerprint, with the option to remove/revoke them, deleting every message and the possibility to talk again (needs to be added again)
+- **Add contact**: Insert name, IP, PubKey and Fingerprint of a contact to add, and it adds the contact into the database
 
 **Important:** Verify contact fingerprints independently before establishing trust. Never assume that receiving a public key automatically authenticates its owner.
 
@@ -354,12 +341,12 @@ Remove a contact:
 
 ## Roadmap
 
-### V2.1.0 — Tor/onion net
+### V2.2.0: Tor/onion net
 
 - Optional Tor/onion networking.
 - Separation of LAN and onion contacts.
 
-### V3.0.0 or more — System-level improvements
+### V3.0.0: System-level improvements
 
 - Rewrite security-critical components in a memory-safe language.
 - More explicit control over cryptographic key lifetimes.
@@ -373,18 +360,19 @@ Remove a contact:
 
 For additional implementation details, see:
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Internal architecture, cryptographic design, protocol and security limitations.
-- [LICENSE](./LICENSE) — Project license.
+- [ARCHITECTURE.md](./ARCHITECTURE.md): Internal architecture, cryptographic design, protocol and security limitations.
+- [SECURITY.md](./SECURITY.md): Instructions on how to report a vulnerability and supported versions
+- [LICENSE](./LICENSE): Project license.
 
 ---
 
 ## Main technologies
 
-- **Python 3.12+** — Application implementation.
-- **Cryptography** — X25519, HKDF, AES-GCM and Argon2id.
-- **SQLCipher** — Encrypted SQLite storage.
-- **Textual** — Terminal user interface.
-- **PyInstaller** — Standalone application packaging.
+- **Python 3.12+**: Application implementation.
+- **Cryptography**: X25519, HKDF, AES-GCM and Argon2id.
+- **SQLCipher**: Encrypted SQLite storage.
+- **Textual**: Terminal user interface.
+- **PyInstaller**: Standalone application packaging.
 
 ---
 

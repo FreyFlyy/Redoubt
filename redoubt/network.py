@@ -326,7 +326,7 @@ class NetworkManager:
         Like proto.read_packet but tries more (fingerprint, wire_key) candidates on the
         same frame. Returns (packet, KeyExchange, authenticated_fp): authenticated_fp is the
         fingerprint of the SPECIFIC candidate whose static key produced the decrypting
-        wire key. This is the cryptographically proven identity of the sender — callers
+        wire key. This is the cryptographically proven identity of the sender, callers
         MUST check it against whatever identity the packet itself later claims, never
         trust the packet's own fields alone.
         """
@@ -486,7 +486,7 @@ class NetworkManager:
         if hello["fingerprint"] != authenticated_fp:
             raise PeerMismatch(
                 f"HELLO claims fingerprint {hello['fingerprint'][:16]}... but the wire "
-                f"key was authenticated by {authenticated_fp[:16]}... — refusing"
+                f"key was authenticated by {authenticated_fp[:16]}..., refusing"
             )
 
         if self.storage.get_contact(hello["fingerprint"]) is None:
