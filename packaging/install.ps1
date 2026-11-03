@@ -12,13 +12,12 @@ $Branch = "main"
 $InstallDir = Join-Path $env:USERPROFILE ".redoubt"
 
 $ExePath = Join-Path $InstallDir "Redoubt.exe"
-$IconPng = Join-Path $InstallDir "redoubt.png"
 $IconIco = Join-Path $InstallDir "redoubt.ico"
 
 $ReleaseApi = "https://api.github.com/repos/$Repo/releases/latest"
 $RawBaseUrl = "https://raw.githubusercontent.com/$Repo/$Branch"
 
-$IconUrl = "$RawBaseUrl/packaging/redoubt.png"
+$IconUrl = "$RawBaseUrl/packaging/redoubt.ico"
 $FontBaseUrl = "$RawBaseUrl/packaging/fonts"
 
 $FontFiles = @(
@@ -143,56 +142,10 @@ Write-Host "Downloading Redoubt icon..."
 
 Invoke-WebRequest `
     -Uri $IconUrl `
-    -OutFile $IconPng
+    -OutFile $IconIco
 
-if (-not (Test-Path $IconPng) -or (Get-Item $IconPng).Length -eq 0) {
+if (-not (Test-Path $IconIco) -or (Get-Item $IconIco).Length -eq 0) {
     throw "Failed to download Redoubt icon."
-}
-
-# Convert PNG to ICO
-
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-
-public class NativeMethods {
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool DestroyIcon(IntPtr hIcon);
-}
-"@
-
-# Convert PNG to ICO
-
-Add-Type -AssemblyName System.Drawing
-
-$Bitmap = [System.Drawing.Bitmap]::FromFile($IconPng)
-
-try {
-    $IconHandle = $Bitmap.GetHicon()
-
-    try {
-        $Icon = [System.Drawing.Icon]::FromHandle($IconHandle)
-
-        try {
-            $IconStream = [System.IO.File]::Create($IconIco)
-
-            try {
-                $Icon.Save($IconStream)
-            }
-            finally {
-                $IconStream.Dispose()
-            }
-        }
-        finally {
-            # Do not dispose the Icon: it wraps the native handle.
-        }
-    }
-    finally {
-        [NativeMethods]::DestroyIcon($IconHandle) | Out-Null
-    }
-}
-finally {
-    $Bitmap.Dispose()
 }
 
 Write-Host "Redoubt icon installed." -ForegroundColor Green
@@ -339,7 +292,6 @@ Write-Host ""
 Write-Host "Installed files:"
 Write-Host "  Redoubt.exe"
 Write-Host "  _internal/"
-Write-Host "  redoubt.png"
 Write-Host "  redoubt.ico"
 
 Write-Host ""
