@@ -296,9 +296,9 @@ The resulting AppImage is placed in the repository root.
 The same contact operations are still available from the command line:
 
 ```bash
-./Redoubt-2.1.0-*.AppImage --add-contact
-./Redoubt-2.1.0-*.AppImage --list-contacts
-./Redoubt-2.1.0-*.AppImage --remove-contact
+./Redoubt-2.1.1-*.AppImage --add-contact
+./Redoubt-2.1.1-*.AppImage --list-contacts
+./Redoubt-2.1.1-*.AppImage --remove-contact
 ```
 
 `--remove-contact` also requires the contact's public key as proof of possession.

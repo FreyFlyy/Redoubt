@@ -292,7 +292,7 @@ def test_version_flag_exits_before_asking_for_the_vault_passphrase(run_env, caps
     argv("--version")
     with pytest.raises(SystemExit) as e:
         app._run()
-    assert e.value.code == 0 and "redoubt 2.1.0" in capsys.readouterr().out
+    assert e.value.code == 0 and "redoubt 2.1.1" in capsys.readouterr().out
     assert calls["loader"] == 0 and calls["core"] == 1               # core dumps disabled first, no passphrase prompt
 
 
