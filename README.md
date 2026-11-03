@@ -35,6 +35,7 @@ The application uses a terminal-based interface powered by Textual and a modular
 - **Contact management:** Add, list and revoke contacts.
 - **Secure memory (best effort):** Memory locking and buffer zeroization.
 - **Terminal interface:** Interactive TUI built with Textual.
+- **Optional update check:** Off by default; when enabled, compares the installed version with the latest GitHub release at launch.
 
 ## Architecture
 
@@ -54,6 +55,7 @@ Redoubt separates its functionality into independent modules:
 | `ratelimit.py` | Rate limiting |
 | `logger.py` | Logging |
 | `themes.py` | Interface themes |
+| `update_check.py` | Optional version check against the latest GitHub release |
 | `ui.py` | Terminal user interface |
 
 For a detailed explanation of the implementation, protocol design, trust assumptions and security limitations, see [ARCHITECTURE.md](./ARCHITECTURE.md).
@@ -83,6 +85,7 @@ Redoubt does not currently provide all the security properties of mature messagi
 - **Memory management:** Memory locking and zeroization are best-effort measures. Python objects and copies of sensitive keys can exist outside protected buffers.
 - **Network metadata:** IP addresses, communication timing, packet counts and communication patterns remain observable.
 - **Trust establishment:** Initial contact verification requires an out-of-band fingerprint exchange. Cryptography cannot independently establish that a public key belongs to the intended person.
+- **Update check (opt-in):** If enabled in Settings, every launch sends an HTTPS request to `api.github.com`: GitHub (and anyone observing your network) learns your IP address and when you start Redoubt. It is off by default and is the only connection to a host that is not a contact.
 - **No protection against a compromised endpoint:** An attacker controlling the operating system or running process is outside the protection provided by the application.
 
 These limitations are deliberate and documented rather than hidden behind broad security claims.
@@ -280,12 +283,13 @@ The resulting AppImage is placed in the repository root.
 
 ---
 
-### Settings menu (top left)
+### Menu (top left)
 
 - **About**: shows author, version and license.
 - **Show card**: shows your PubKey and Fingerprint (SHA-256 of PubKey, as a double check).
 - **Contact list**: shows, for every saved contact, name, IP, PubKey and Fingerprint, with the option to revoke them, deleting every message (the contact must be added again to chat).
 - **Add contact**: insert name, IP, PubKey and Fingerprint to add a contact to the database.
+- **Settings**: *Check version at launch* (off by default). If on, at launch Redoubt compares its version with the latest GitHub release and shows a popup if a newer release exists, or if the installed version is newer than the latest release (withdrawn release, regression or development build).
 
 ### Contact management from the CLI (Linux legacy)
 

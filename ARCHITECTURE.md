@@ -224,6 +224,18 @@ Sliding window, three distinct uses:
 
 ---
 
+## Update check (optional)
+
+`update_check.py`: stdlib-only module (`urllib`), no dependency on the rest of the package. Runs only if `check_version_at_launch` is `true` in `~/.redoubt/settings.json` (toggle: `Menu` → `Settings`); missing, `false` or non-boolean values mean off.
+
+- **Request:** one HTTPS `GET` to `https://api.github.com/repos/FreyFlyy/Redoubt/releases/latest`, 5 s timeout, TLS certificate verification on, generic `User-Agent` (no version or OS), response capped at 1 MiB. Runs in a worker thread: the UI never waits for it.
+- **Parsing:** the tag must be `MAJOR.MINOR.PATCH` (optional leading `v`); anything else (pre-release suffixes included) is rejected, not guessed. Versions are compared as integer tuples.
+- **Outcome:** remote > local shows an "update available" popup; local > remote shows a "possible regression" popup (withdrawn release, rollback or development build: the check cannot tell them apart); equal shows nothing. Any failure (offline, HTTP error, bad payload) is logged and reported only as a dim status-bar line.
+- **No automatic update:** the check never downloads or installs anything and never touches contacts, identity or database.
+- **Metadata:** GitHub (and network observers) learn the user's IP address and launch time. This traffic is outside the P2P protocol and not covered by its padding or wire encryption.
+
+---
+
 ## Operational parameters (network.py)
 
 | Parameter | Value | Meaning |

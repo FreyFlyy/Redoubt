@@ -5,6 +5,7 @@ HOME is redirected BEFORE any `redoubt` import, because identity/storage/logger
 compute their paths (~/.redoubt) at import time. This keeps tests away from
 the real user data.
 """
+
 import os
 import tempfile
 

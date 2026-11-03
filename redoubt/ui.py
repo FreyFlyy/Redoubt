@@ -10,10 +10,11 @@ import json
 from datetime import datetime
 from . import __version__
 from . import contact_validation
+from . import update_check
 from . import protocol as proto
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Header, Input, Label, ListItem, ListView, OptionList, RichLog, Static
+from textual.widgets import Header, Input, Label, ListItem, ListView, OptionList, RichLog, Static, Switch
 from textual.widgets.option_list import Option
 from textual.screen import ModalScreen
 from textual.widgets import Button
@@ -28,6 +29,7 @@ logger = logger_mod.get_logger(__name__)
 ## Variables
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".redoubt", "settings.json")
+SETTING_CHECK_VERSION = "check_version_at_launch"   # settings.json key (bool, off by default)
 
 BYTE_COUNTER_WARNING_THRESHOLD = 2300   # threshold for "approaching max bytes"
 
@@ -153,7 +155,7 @@ class ContactItem(ListItem):
 ## Model CSS block for popups
 
 MODAL_CSS = """
-ConfirmClearScreen, ConfirmQuitScreen, ConfirmRevokeScreen, AboutScreen {
+ConfirmClearScreen, ConfirmQuitScreen, ConfirmRevokeScreen, AboutScreen, VersionNoticeScreen {
     align: center middle;
     background: $background 60%;
 }
@@ -246,17 +248,17 @@ class ConfirmQuitScreen(ModalScreen):
 
 
 
-## Settings dropdown menu class
+## Menu dropdown class
 
-class SettingsMenuScreen(ModalScreen):
+class MenuScreen(ModalScreen):
     """Dropdown anchored under the top-left menu button. Dismisses with the chosen option id (or None)"""
     CSS = """
-    SettingsMenuScreen {
+    MenuScreen {
         align: left top;
         background: $background 0%;
     }
 
-    #settings_menu {
+    #main_menu {
         width: 24;
         height: auto;
         margin: 2 0 0 0;
@@ -274,7 +276,8 @@ class SettingsMenuScreen(ModalScreen):
             Option("Show card", id="show_card"),
             Option("Contact list", id="contacts"),
             Option("Add contact", id="add"),
-            id="settings_menu",
+            Option("Settings", id="settings"),
+            id="main_menu",
         )
 
     def on_mount(self) -> None:
@@ -305,6 +308,122 @@ class AboutScreen(ModalScreen):
         """Compose the popup"""
         with Vertical(id="dialog"):
             yield Label(f"👤 Francesco Scolz\nRedoubt {__version__}\n📄 AGPL 3.0")
+            with Horizontal(id="buttons_row"):
+                yield Button("Close", id="close", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+## Settings class
+
+class SettingsScreen(ModalScreen):
+    """Settings popup (only "check version at launch" for now). Every change is saved immediately"""
+
+    CSS = """
+    SettingsScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+
+    #settings_dialog {
+        width: 60;
+        height: auto;
+        background: $panel;
+        padding: 1 2;
+    }
+
+    #settings_title {
+        width: 100%;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #setting_row {
+        height: auto;
+    }
+
+    #setting_row Label {
+        width: 1fr;
+        height: 3;
+        content-align: left middle;
+    }
+
+    #settings_hint {
+        margin-top: 1;
+        color: $text-muted;
+    }
+
+    #settings_buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "close", show=False)]
+
+    def compose(self) -> ComposeResult:
+        """Compose the popup"""
+        with Vertical(id="settings_dialog"):
+            yield Label("[b]Settings[/]", id="settings_title")
+            with Horizontal(id="setting_row"):
+                yield Label("Check version at launch")
+                yield Switch(value=load_settings().get(SETTING_CHECK_VERSION) is True, id="check_version_switch")
+            yield Static(
+                "Contacts api.github.com at every launch: GitHub sees your IP address. Off by default.",
+                id="settings_hint",
+            )
+            with Horizontal(id="settings_buttons"):
+                yield Button("Close", id="close", variant="primary")
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        """Save the new value right away (merging, so other settings are kept)"""
+        event.stop()
+        if event.switch.id == "check_version_switch":
+            data = load_settings()
+            data[SETTING_CHECK_VERSION] = event.value
+            save_settings(data)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+## Version notice class
+
+class VersionNoticeScreen(ModalScreen):
+    """Startup notice. kind="update": a newer release exists. kind="regression": the installed version is newer than the latest release"""
+    CSS = MODAL_CSS
+
+    BINDINGS = [Binding("escape", "close", show=False)]
+
+    def __init__(self, local: str, remote: str, kind: str):
+        super().__init__()
+        self._local = local
+        self._remote = remote
+        self._kind = kind
+
+    def compose(self) -> ComposeResult:
+        """Compose the popup"""
+        versions = f"Installed version: {self._local}\nLatest release: {self._remote}"
+        if self._kind == "update":
+            text = f"[b]Update available[/]\n\n{versions}\n\n{update_check.RELEASES_URL}"
+        else:
+            text = (
+                f"[b]Possible regression[/]\n\n{versions}\n\n"
+                "The installed version is newer than the latest published release: "
+                "the release may have been withdrawn or rolled back, or this is a development build."
+            )
+        with Vertical(id="dialog"):
+            yield Label(text)
             with Horizontal(id="buttons_row"):
                 yield Button("Close", id="close", variant="primary")
 
@@ -665,7 +784,7 @@ class RedoubtApp(App):
         background: $panel;
     }
 
-    #topbar #settings_btn {
+    #topbar #menu_btn {
         height: 1;
         min-width: 0;
         padding: 0 2;
@@ -674,7 +793,7 @@ class RedoubtApp(App):
         color: $text;
     }
 
-    #topbar #settings_btn:hover, #topbar #settings_btn:focus {
+    #topbar #menu_btn:hover, #topbar #menu_btn:focus {
         border: none;
         background: $secondary-darken-2;
     }
@@ -744,7 +863,7 @@ class RedoubtApp(App):
         Binding("ctrl+q", "request_quit", "(Q)uit", show=True),
         Binding("ctrl+l", "clear_chat", "C(L)ear chat", show=True),
         Binding("ctrl+t", "toggle_theme", "(T)heme", show=True),
-        Binding("f2", "open_settings", "Settings", show=True),
+        Binding("f2", "open_menu", "Menu", show=True),
     ]
 
     def __init__(self, identity, storage, network):
@@ -763,9 +882,9 @@ class RedoubtApp(App):
         """Compose full UI (topbar with settings, sidebar, chat area, textbox and panels"""
 
         with Horizontal(id="topbar"):
-            settings_btn = Button("☰ Settings", id="settings_btn")
-            settings_btn.can_focus = False  # keep focus on the textbox
-            yield settings_btn
+            menu_btn = Button("☰ Menu", id="menu_btn")
+            menu_btn.can_focus = False  # keep focus on the textbox
+            yield menu_btn
 
             header = Header(show_clock=True, icon="")
             header.can_focus = False
@@ -799,6 +918,9 @@ class RedoubtApp(App):
         self.title = "Redoubt"
         self.query_one("#msg_input").focus()
 
+        if load_settings().get(SETTING_CHECK_VERSION) is True:  # opt-in only (off by default)
+            self.run_worker(self._check_version_worker, thread=True, exit_on_error=False)
+
 
     ## Command actions
 
@@ -826,22 +948,22 @@ class RedoubtApp(App):
         """Textual action to quit the app | ctrl+Q"""
         self.push_screen(ConfirmQuitScreen(), self.quit_confirmed)
 
-    def action_open_settings(self):
-        """Textual action to open the settings dropdown | F2 or click on the top-left button"""
+    def action_open_menu(self):
+        """Textual action to open the menu dropdown | F2 or click on the top-left button"""
         if len(self.screen_stack) > 1:  # a popup is already open
             return
-        self.push_screen(SettingsMenuScreen(), self.settings_menu_chosen)
+        self.push_screen(MenuScreen(), self.menu_chosen)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Top-left settings button"""
-        if event.button.id == "settings_btn":
+        """Top-left menu button"""
+        if event.button.id == "menu_btn":
             event.stop()
-            self.action_open_settings()
+            self.action_open_menu()
 
 
-    ## Settings menu
+    ## Menu
 
-    def settings_menu_chosen(self, choice):
+    def menu_chosen(self, choice):
         """Open the screen related to the chosen dropdown option"""
         if choice == "about":
             self.push_screen(AboutScreen())
@@ -851,6 +973,8 @@ class RedoubtApp(App):
             self.push_screen(ContactListScreen(self.storage.list_contacts()))
         elif choice == "add":
             self.push_screen(AddContactScreen(self.storage, self.identity), self.contact_added)
+        elif choice == "settings":
+            self.push_screen(SettingsScreen())
 
     def contact_added(self, name):
         """Add-contact form closed: if a contact was added, refresh the sidebar"""
@@ -888,6 +1012,44 @@ class RedoubtApp(App):
         self.query_one("#statusbar", Static).update(f"Contact {escape(name)} revoked")
 
 
+    ## Version check
+
+    def _check_version_worker(self):
+        """Worker thread (blocking network call). Hands the result to the UI thread (None = check failed)"""
+        try:
+            remote = update_check.fetch_latest_version()
+        except Exception as e:  # an exception escaping a worker would close the app
+            logger.warning(f"Version check failed: {e}")
+            remote = None
+
+        try:
+            self.call_from_thread(self._version_check_done, remote)
+        except RuntimeError:
+            logger.debug("App closed before the version check finished")
+
+    def _version_check_done(self, remote):
+        """UI thread: popup only if the remote and local versions differ"""
+        if not self.is_running:
+            return
+
+        try:
+            kind = update_check.classify(__version__, remote) if remote else "failed"
+        except update_check.UpdateCheckError as e:
+            logger.warning(f"Version check failed: {e}")
+            kind = "failed"
+
+        statusbar = self.query_one("#statusbar", Static)
+        if kind is None:    # same version: nothing to say
+            return
+        if kind == "failed":
+            statusbar.update("[dim]Version check failed (offline or GitHub unreachable)[/]")
+            return
+        if len(self.screen_stack) > 1:  # another popup is open: do not interrupt it
+            statusbar.update(f"[dim]Version check: latest release is {remote}, installed {__version__}[/]")
+            return
+        self.push_screen(VersionNoticeScreen(__version__, remote, kind))
+
+
     ## Theme
 
     def update_theme_indicator(self):
@@ -900,7 +1062,9 @@ class RedoubtApp(App):
     def quit_confirmed(self, confirmed):
         """Confirmed quitting status, save settings and exit"""
         if confirmed:
-            save_settings({"theme": self.theme})
+            settings = load_settings()  # merge: other keys (e.g. check_version_at_launch) must survive
+            settings["theme"] = self.theme
+            save_settings(settings)
             self.exit()
 
     def clear_chat_confirmed(self, confirmed):
