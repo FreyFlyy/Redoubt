@@ -78,6 +78,7 @@ class Session:
         self.ratchet = ratchet    # Double Ratchet state (ALWAYS access it while holding self.lock)
         self.wire_key = wire_key    # ciphers entre binary frame
         self.seen_msg_ids = set()   # set of seen message ids, to avoid double ratchet when clearing the chat with an already seen message without the other peer getting ACK (this makes them re-transmit and waste a second step, misaligning the entire chain)
+        self.sent_msg_ids = set()   # messages already encrypted/sent on this session: a concurrent flush must not waste another ratchet step on them
         self.lock = threading.Lock()
         self.send_lock = threading.Lock()  # serializes EVERY write on the socket
         self.alive = True
@@ -577,15 +578,16 @@ class NetworkManager:
             if connect:
                 self.on_status(contact[0], "offline")
 
-    def _presence_task(self, contact, status, connect):
+    def _presence_task(self, contact, status, connect, owns_inflight=True):
         """Worker of broadcast_presence (one thread per contact)"""
         try:
             if status == "online" and self._closing.is_set():
                 return  # never announce "online" after shutdown began
             self.send_presence(contact, status, connect=connect)
         finally:
-            with self._presence_inflight_lock:
-                self._presence_inflight.discard(contact[0])
+            if owns_inflight:   # an offline send may run alongside an already in-flight online attempt
+                with self._presence_inflight_lock:
+                    self._presence_inflight.discard(contact[0])
 
     def broadcast_presence(self, status, wait=None):
         """
@@ -603,10 +605,14 @@ class NetworkManager:
         for contact in self.storage.list_contacts():
             fp = contact[0]
             with self._presence_inflight_lock:
-                if fp in self._presence_inflight:
-                    continue
-                self._presence_inflight.add(fp)
-            t = threading.Thread(target=self._presence_task, args=(contact, status, connect), daemon=True)
+                already_inflight = fp in self._presence_inflight
+                if already_inflight and connect:
+                    continue    # only "online" dials: never pile up a second attempt
+                if not already_inflight:
+                    self._presence_inflight.add(fp)
+            # "offline" must still reach live peers even if an "online" broadcast is in flight for them
+            t = threading.Thread(target=self._presence_task,
+                                 args=(contact, status, connect, not already_inflight), daemon=True)
             t.start()
             workers.append(t)
 
@@ -949,7 +955,11 @@ class NetworkManager:
             return
 
         for msg_id, text in self.storage.pending_for(contact_fingerprint):   # for every pending message
-            # Leave the retry to the ACK watchdog, which correctly reuses the original key/chain_index
+            # Already sent on this live session: leave any retry to the ACK watchdog, which reuses the original
+            # key/chain_index. Checking this also closes the race with a fast ACK that clears pending_acks
+            # while the outbox row is not deleted yet (without it the message would be re-encrypted).
+            if msg_id in session.sent_msg_ids:
+                continue
             with self.pending_acks_lock:
                 existing = self.pending_acks.get(msg_id)
             if existing is not None and existing["session"] is session and existing["session"].alive:
@@ -970,6 +980,7 @@ class NetworkManager:
             packet = proto.build_message(msg_id, self.identity.fingerprint, timestamp, nonce, ct, header.n, header.dh, header.pn)
             packet = proto.add_padding(packet)
             try:    # try to send packet and store
+                session.sent_msg_ids.add(msg_id)    # set before send so no concurrent flush can encrypt it again
                 session.send(packet)
                 self.storage.store_message(msg_id, contact_fingerprint, "out", timestamp, text)
 
@@ -983,6 +994,7 @@ class NetworkManager:
                     }
 
             except OSError as e:
+                session.sent_msg_ids.discard(msg_id)    # not sent after all: a future session may retry it
                 self.on_statusbar_message(contact_fingerprint, f"OS Error: sending message failed: {e}")
                 logger.warning(f"OS Error: sending message to {contact_fingerprint[:16]}... failed: {e}")
                 self.storage.bump_attempts(msg_id)
