@@ -43,16 +43,16 @@ def _confirm_migration(description: str) -> bool:
         logger.info(f"Non-interactive mode: auto-confirming migration: {description}")
         return True
 
-    print(f"\n⚠️  MIGRAZIONE RICHIESTA")
+    print(f"\n⚠️  MIGRATION NEEDED")
     print(f"   {description}")
-    print(f"   Verranno creati backup in ~/.redoubt/backups/")
-    print(f"   Vuoi procedere? [y/N]: ", end="", flush=True)
+    print(f"   Backups will be created in ~/.redoubt/backups/")
+    print(f"   Continue? [y/N]: ", end="", flush=True)
 
     try:
         response = sys.stdin.readline().strip().lower()
         return response in ('y', 'yes', 's', 'si', 'sì')
     except (EOFError, KeyboardInterrupt):
-        print("\nAnnullato.")
+        print("\nAborted.")
         return False
 
 
