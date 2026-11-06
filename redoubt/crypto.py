@@ -51,12 +51,16 @@ def fingerprint_of(pubkey_raw: bytes) -> str:
 ## Local passphrase cipher of identity and local database (containing contacts and messages)
 
 # Argon2id parameters (anti brute-force)
-ARGON2ID_TIME_COST = 3
+ARGON2ID_TIME_COST = 4
 ARGON2ID_MEMORY_COST_KIB = 262144    # =256 MiB RAM for every try, limits mass brute force attacks and slows down the process
 ARGON2ID_PARALLELISM = 4
 
+# Key separation labels for vault key derivation
+VAULT_KEY_IDENTITY_LABEL = b"PRIVACY STARTS FROM IDENTITY"
+VAULT_KEY_DATABASE_LABEL = b"YOU CANNOT SPY MY MESSAGES"
+
 def derive_vault_key(passphrase: str, salt: bytes) -> bytes:
-    """Derive vault key from selected passphrase (inserted while creating the first local identity)"""
+    """Derive master vault key from selected passphrase (inserted while creating the first local identity)"""
     kdf = Argon2id(
         salt=salt, length=32,
         iterations=ARGON2ID_TIME_COST,
@@ -65,6 +69,11 @@ def derive_vault_key(passphrase: str, salt: bytes) -> bytes:
         ad=None, secret=None,
     )
     return kdf.derive(passphrase.encode("utf-8"))
+
+def derive_subkey(master_key: bytes, label: bytes) -> bytes:
+    """Derive a purpose-specific subkey from the master vault key using HKDF-SHA256"""
+    hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=label)
+    return hkdf.derive(master_key)
 
 def derive_wire_key(dh_ee: bytes, term1: bytes, term2: bytes) -> bytes:
     """Derive an authenticated transport key (Noise-KK scheme) resistant to MITM attacks via static keys"""

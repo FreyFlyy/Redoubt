@@ -5,6 +5,7 @@ Contact input validation for Redoubt (shared by the CLI and the UI form,
 so the trust-establishing checks live in exactly one place)
 """
 
+import hmac
 import ipaddress
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
@@ -21,6 +22,11 @@ def format_fingerprint(fp: str) -> str:
 def normalize_fingerprint(s: str) -> str:
     """Remove every whitespace character and lowercase (fingerprints are lowercase hex)"""
     return "".join(s.split()).lower()
+
+
+def _fingerprint_matches(computed: str, provided: str) -> bool:
+    """Constant-time fingerprint comparison to avoid timing side-channels"""
+    return hmac.compare_digest(computed, provided)
 
 
 def validate_new_contact(storage, ident, name, ip_input, pubkey_b64, fingerprint_input):
@@ -54,7 +60,7 @@ def validate_new_contact(storage, ident, name, ip_input, pubkey_b64, fingerprint
         raise ValueError("Public key is not a valid X25519 key (base64 of 32 bytes).") from None
 
     computed_fp = crypto.fingerprint_of(pubkey_raw)
-    if computed_fp != fingerprint_input:
+    if not _fingerprint_matches(computed_fp, fingerprint_input):
         raise ValueError("Fingerprint does not match Public key. Always share it on a secure out-of-band channel.")
 
     if computed_fp == ident.fingerprint:

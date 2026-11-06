@@ -10,6 +10,7 @@ import json
 import threading
 from sqlcipher3 import dbapi2 as sqlcipher
 from . import crypto
+from . import migration
 from . import logger as logger_mod
 logger = logger_mod.get_logger(__name__)
 
@@ -45,20 +46,54 @@ CREATE TABLE IF NOT EXISTS outbox (
 """
 
 
-## Storage clasS
+## Storage class
+
+def _open_db_with_migration(master_vault_key: bytes, db_path: str):
+    """Open database, migrating from old format if needed."""
+    # If database file doesn't exist, it's fresh - use new format
+    if not os.path.exists(db_path):
+        db_key = crypto.derive_subkey(master_vault_key, crypto.VAULT_KEY_DATABASE_LABEL)
+        conn = sqlcipher.connect(db_path, check_same_thread=False)
+        conn.execute(f"PRAGMA key = \"x'{db_key.hex()}'\"")
+        return conn, db_key
+    
+    # Try new format first (db subkey)
+    db_key = crypto.derive_subkey(master_vault_key, crypto.VAULT_KEY_DATABASE_LABEL)
+    conn = sqlcipher.connect(db_path, check_same_thread=False)
+    conn.execute(f"PRAGMA key = \"x'{db_key.hex()}'\"")
+    try:
+        conn.execute("SELECT count(*) FROM sqlite_master")
+        return conn, db_key  # Success with new format
+    except Exception:
+        pass
+    
+    # Try old format (master key directly)
+    conn.close()
+    conn = sqlcipher.connect(db_path, check_same_thread=False)
+    conn.execute(f"PRAGMA key = \"x'{master_vault_key.hex()}'\"")
+    try:
+        conn.execute("SELECT count(*) FROM sqlite_master")
+        # Old format works - migrate
+        logger.info("Database in old format detected, migrating to key-separated format...")
+        migration._migrate_database(conn, master_vault_key, master_vault_key)
+        # Reopen with new key
+        conn.close()
+        conn = sqlcipher.connect(db_path, check_same_thread=False)
+        conn.execute(f"PRAGMA key = \"x'{db_key.hex()}'\"")
+        conn.execute("SELECT count(*) FROM sqlite_master")
+        return conn, db_key
+    except Exception:
+        pass
+    
+    # Neither format works - corrupted or wrong key
+    conn.close()
+    raise ValueError("Cannot open database: wrong passphrase or corrupted data")
+
 
 class Storage:
-    def __init__(self, vault_key: bytes, db_path: str = DB_FILE):
+    def __init__(self, master_vault_key: bytes, db_path: str = DB_FILE):
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.vault_key = vault_key
-        self.conn = sqlcipher.connect(db_path, check_same_thread=False)
-
-        self.conn.execute(f"PRAGMA key = \"x'{self.vault_key.hex()}'\"")
-        try:
-            self.conn.execute("SELECT count(*) FROM sqlite_master")
-        except Exception:
-            self.conn.close()
-            raise ValueError("Cannot open database: wrong passphrase or corrupted data")
+        self.conn, self.db_key = _open_db_with_migration(master_vault_key, db_path)
 
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
@@ -78,12 +113,12 @@ class Storage:
             "port": port,
             "public_key_b64": public_key_b64,
         }).encode("utf-8")
-        return crypto.vault_encrypt(self.vault_key, payload)
+        return crypto.vault_encrypt(self.db_key, payload)
 
     def _decrypt_contact(self, fingerprint, blob):
         """Decrypts a contact entry for reading"""
         try:
-            data = json.loads(crypto.vault_decrypt(self.vault_key, blob).decode("utf-8"))
+            data = json.loads(crypto.vault_decrypt(self.db_key, blob).decode("utf-8"))
         except Exception as e:
             logger.exception(f"Contact {fingerprint[:12]}... impossible to decrypt (wrong vault_key or corrupted database): {e}")
             return (fingerprint, "[CONTACT DECRYPT ERROR]", "?", 0, "")
@@ -98,12 +133,12 @@ class Storage:
     def _encrypt_message(self, text: str, peer_ip) -> bytes:
         """Encrypts a message entry for storage"""
         payload = json.dumps({"text": text, "peer_ip": peer_ip}).encode("utf-8")
-        return crypto.vault_encrypt(self.vault_key, payload)
+        return crypto.vault_encrypt(self.db_key, payload)
 
     def _decrypt_message(self, blob):
         """Decrypts a message entry for reading"""
         try:
-            data = json.loads(crypto.vault_decrypt(self.vault_key, blob).decode("utf-8"))
+            data = json.loads(crypto.vault_decrypt(self.db_key, blob).decode("utf-8"))
             return data["text"], data.get("peer_ip")
         except Exception:
             return "[MESSAGE DECRYPTION ERROR]", None
@@ -232,7 +267,7 @@ class Storage:
 
     def enqueue_outbox(self, msg_id, contact_fingerprint, plaintext):
         """Enqueue a message for a contact in the "unreceived" table"""
-        blob = crypto.vault_encrypt(self.vault_key, plaintext.encode("utf-8"))
+        blob = crypto.vault_encrypt(self.db_key, plaintext.encode("utf-8"))
         with self._lock:
             self.conn.execute(
                 "INSERT INTO outbox (id, contact_fingerprint, message_at_rest, created_at, attempts) "
@@ -250,7 +285,7 @@ class Storage:
         )
         out = []
         for mid, blob in cur.fetchall():
-            text = crypto.vault_decrypt(self.vault_key, blob).decode("utf-8")
+            text = crypto.vault_decrypt(self.db_key, blob).decode("utf-8")
             out.append((mid, text))
         return out
 

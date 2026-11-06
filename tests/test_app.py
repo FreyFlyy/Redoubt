@@ -155,7 +155,7 @@ def test_remove_contact_refusals_keep_the_contact(case, store, monkeypatch, caps
     assert store.get_contact(fp) is not None
 
 
-## ---------------------------------------------------------------- Textual UI wiring: settings menu + theme
+## ---------------------------------------------------------------- Textual UI wiring: menu + theme
 
 class _FakeNetwork:
     """Stand-in NetworkManager: RedoubtApp only assigns its callbacks on the network object"""
@@ -179,24 +179,24 @@ def _patch_push_screen(monkeypatch, pushed):
     monkeypatch.setattr(ui.RedoubtApp, "push_screen", fake_push)
 
 
-def test_open_settings_pushes_the_dropdown_when_no_popup_is_open(ident, store, monkeypatch):
+def test_open_menu_pushes_the_dropdown_when_no_popup_is_open(ident, store, monkeypatch):
     app = _make_app(ident, store)
     monkeypatch.setattr(ui.RedoubtApp, "screen_stack", property(lambda self: []))    # no popup open
     pushed = []
     _patch_push_screen(monkeypatch, pushed)
-    app.action_open_settings()
+    app.action_open_menu()
     assert len(pushed) == 1
     screen, callback = pushed[0]
-    assert isinstance(screen, ui.SettingsMenuScreen)
-    assert callback == app.settings_menu_chosen
+    assert isinstance(screen, ui.MenuScreen)
+    assert callback == app.menu_chosen
 
 
-def test_open_settings_is_a_no_op_when_a_popup_is_open(ident, store, monkeypatch):
+def test_open_menu_is_a_no_op_when_a_popup_is_open(ident, store, monkeypatch):
     app = _make_app(ident, store)
     monkeypatch.setattr(ui.RedoubtApp, "screen_stack", property(lambda self: [object(), object()]))    # popup already open
     pushed = []
     _patch_push_screen(monkeypatch, pushed)
-    app.action_open_settings()
+    app.action_open_menu()
     assert pushed == []
 
 
@@ -206,22 +206,22 @@ def test_open_settings_is_a_no_op_when_a_popup_is_open(ident, store, monkeypatch
     ("contacts", ui.ContactListScreen, False),
     ("add", ui.AddContactScreen, True),
 ])
-def test_settings_menu_chosen_opens_the_expected_screen(ident, store, monkeypatch, choice, expected_screen, expect_callback):
+def test_menu_chosen_opens_the_expected_screen(ident, store, monkeypatch, choice, expected_screen, expect_callback):
     app = _make_app(ident, store)
     pushed = []
     _patch_push_screen(monkeypatch, pushed)
-    app.settings_menu_chosen(choice)
+    app.menu_chosen(choice)
     assert len(pushed) == 1
     screen, callback = pushed[0]
     assert isinstance(screen, expected_screen)
     assert (callback == app.contact_added) is expect_callback
 
 
-def test_settings_menu_chosen_ignores_unknown_choices(ident, store, monkeypatch):
+def test_menu_chosen_ignores_unknown_choices(ident, store, monkeypatch):
     app = _make_app(ident, store)
     pushed = []
     _patch_push_screen(monkeypatch, pushed)
-    app.settings_menu_chosen("not-a-real-option")
+    app.menu_chosen("not-a-real-option")
     assert pushed == []
 
 
