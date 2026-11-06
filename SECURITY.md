@@ -65,7 +65,6 @@ These are documented limitations of the current version, not vulnerabilities:
 - Attacker with access to the running process, root, ptrace or cold-boot on powered RAM
 - Network metadata: IP addresses, timing, packet counts
 - Plaintext copies of the vault key in ordinary process memory (see [Secure memory](./ARCHITECTURE.md#secure-memory))
-- Reuse of the vault key for `identity.enc` and the SQLCipher database (documented in ARCHITECTURE.md)
 - Compromised endpoint, malicious OS or malicious AppImage obtained from an unofficial source
 - Social engineering, or skipping the out-of-band fingerprint verification
 - Vulnerabilities in third-party dependencies that are not exploitable through Redoubt (report them upstream)
