@@ -38,7 +38,7 @@ The wire encryption and message encryption are independent cryptographic layers:
 
 Wire keys, root keys and chain keys use distinct HKDF/HMAC `info` labels (domain separation), preventing direct cross-protocol key reuse between derivation contexts.
 
-**Known exception:** the vault key does not follow this rule. The same key derived from Argon2id encrypts both `identity.enc` (custom AES-GCM) and the entire database (passed raw to SQLCipher via `PRAGMA key`). No dedicated sub-key exists for the two uses: a weakness in either encryption scheme exposes the other as well.
+**Vault key separation:** the master vault key (derived from the passphrase via Argon2id) is **not used directly** for encryption. Instead, two independent subkeys are derived via HKDF-SHA256 with distinct `info` labels
 
 ---
 
@@ -46,8 +46,11 @@ Wire keys, root keys and chain keys use distinct HKDF/HMAC `info` labels (domain
 
 - Permanent X25519 keypair per installation, generated on first run.
 - Fingerprint = SHA-256 of the raw public key, hex, 64 characters.
-- Private key encrypted at rest with a local **vault passphrase** (never transmitted over the network), derived via Argon2id (256 MiB, 3 iterations, 4 lanes).
-- The same vault key unlocks both the identity and the database (see [Storage](#storage)): one secret to remember, two encrypted files (not two independent keys, see exception above).
+- Private key encrypted at rest with a local **vault passphrase** (never transmitted over the network), derived via Argon2id (256 MiB, 4 iterations, 4 lanes).
+- The master vault key is **not used directly** for encryption. Two independent subkeys are derived via HKDF-SHA256 with distinct `info` labels:
+  - Identity subkey (`VAULT_KEY_IDENTITY_LABEL`) → encrypts `identity.enc` (AES-256-GCM)
+  - Database subkey (`VAULT_KEY_DATABASE_LABEL`) → passed to SQLCipher as `PRAGMA key` for `redoubt.db`
+- One secret (the passphrase) protects both files, but the encryption keys are cryptographically separated. Compromise of the master vault key (via passphrase brute-force or live process access) exposes both subkeys and therefore both `identity.enc` and `redoubt.db`.
 
 ---
 
@@ -180,7 +183,9 @@ Compromise of an individual message key does not reveal previous or subsequent m
 
 Stealing a static identity key alone is insufficient to reconstruct previously established session root keys because those keys depend on ephemeral DH secrets.
 
-### Session lifecycle and limitations
+**Post-Quantum Readiness (Store-Now-Decrypt-Later)**
+
+The implementation does not provide post-quantum security. All asymmetric cryptography uses X25519 (ECDH over Curve25519), all key derivation uses HKDF-SHA256, and all symmetric encryption uses AES-256-GCM. A future Cryptographically Relevant Quantum Computer (CRQC) running Shor's algorithm can break X25519, recovering static identity keys and all ephemeral DH secrets from recorded handshakes. This enables **harvest-now-decrypt-later** attacks: a passive network observer who records today's encrypted traffic can, once a CRQC exists, retroactively decrypt all past communications (wire layer, message layer, and—if the vault passphrase is also compromised or brute-forced—the at-rest database). No hybrid PQC KEM (e.g., ML-KEM/X25519) or PQC signatures are currently implemented. This is a known limitation; migration to post-quantum cryptography is planned for v3.0.0 (see README Roadmap).
 
 Each TCP handshake establishes a new session and initializes a fresh Double Ratchet.
 
@@ -194,23 +199,19 @@ A compromise of the complete live ratchet state can expose the current communica
 
 Double Ratchet does not prevent an attacker possessing a compromised identity key from impersonating that identity.
 
-The implementation does not provide post-quantum security.
-
 ---
 
 ## Storage
 
-SQLite via SQLCipher: the entire `.db` file (schema, indexes and WAL included) is encrypted until the vault key is supplied (`PRAGMA key` in `Storage.__init__`, explicitly verified with a check query before proceeding).
+SQLite via SQLCipher: the entire `.db` file (schema, indexes and WAL included) is encrypted until the **database subkey** (derived from the master vault key via HKDF-SHA256 with label `VAULT_KEY_DATABASE_LABEL`) is supplied (`PRAGMA key` in `Storage.__init__`, explicitly verified with a check query before proceeding).
 
-On top of that, per-field encryption (`crypto.vault_encrypt`) protects sensitive content (contact name, IP, public key and message text).
+On top of that, per-field encryption (`crypto.vault_encrypt` using the same database subkey) protects sensitive content (contact name, IP, public key and message text).
 
 Columns that stay in plaintext **inside** the unlocked database (fingerprint, timestamp, direction, unread): needed for SQLite indexing and querying without decrypting every row.
 
 This is not an external-facing plaintext exposure: the entire database file remains encrypted at the SQLCipher level.
 
-**Known limitation:** the vault key is shared between identity encryption and database encryption. Compromise of this key exposes both.
-
-The Double Ratchet does not protect messages already stored in the database against vault key compromise.
+**At-rest protection model:** all persistent secrets (identity private key, contacts, messages) are ultimately protected by the **vault passphrase**. The Argon2id KDF (256 MiB, 4 iterations, 4 lanes) slows brute-force, but a weak passphrase remains the single point of failure. If an attacker obtains `~/.redoubt/identity.enc` and `~/.redoubt/redoubt.db` and cracks the passphrase (or extracts the master vault key from a live process), **all stored data is compromised**. The Double Ratchet does not protect messages already stored in the database against vault key compromise.
 
 ---
 

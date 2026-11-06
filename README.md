@@ -317,10 +317,9 @@ The same contact operations are still available from the command line:
 ### V3.0.0: System-level improvements
 
 - Rewrite security-critical components in a memory-safe language.
-- More explicit control over cryptographic key lifetimes.
+- Migration to post-quantum cryptographic algorithms.
 - Improved protection of sensitive material in RAM.
 - Timing obfuscation and dummy traffic.
-- Further reduction of network metadata leakage.
 
 ---
 
