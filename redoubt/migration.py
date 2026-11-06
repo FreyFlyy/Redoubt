@@ -42,12 +42,12 @@ def _confirm_migration(description: str) -> bool:
     if not sys.stdin.isatty():
         logger.info(f"Non-interactive mode: auto-confirming migration: {description}")
         return True
-    
+
     print(f"\n⚠️  MIGRAZIONE RICHIESTA")
     print(f"   {description}")
     print(f"   Verranno creati backup in ~/.redoubt/backups/")
     print(f"   Vuoi procedere? [y/N]: ", end="", flush=True)
-    
+
     try:
         response = sys.stdin.readline().strip().lower()
         return response in ('y', 'yes', 's', 'si', 'sì')
@@ -96,7 +96,7 @@ def _get_db_file():
 
 def _try_load_identity_new_format(vault_passphrase: str, time_cost: int = None):
     """
-    Try loading identity with new format (subkey). 
+    Try loading identity with new format (subkey).
     Returns (priv, master_key, time_cost_used) or None.
     If time_cost is None, uses current crypto.ARGON2ID_TIME_COST.
     """
@@ -126,7 +126,7 @@ def _try_load_identity_new_format(vault_passphrase: str, time_cost: int = None):
 
 def _try_load_identity_old_format(vault_passphrase: str, time_cost: int = None):
     """
-    Try loading identity with old format (direct master key). 
+    Try loading identity with old format (direct master key).
     Returns (priv, master_key, time_cost_used) or None.
     If time_cost is None, uses current crypto.ARGON2ID_TIME_COST.
     """
@@ -203,7 +203,7 @@ def _migrate_identity_file(vault_passphrase: str, salt: bytes, legacy_time_cost:
 
     # Derive current master key (time_cost=4)
     master_vault_key = crypto.derive_vault_key(vault_passphrase, salt)
-    
+
     # If legacy_time_cost is provided, derive legacy master key to decrypt
     if legacy_time_cost is not None:
         legacy_master_key = _derive_vault_key_with_time_cost(vault_passphrase, salt, legacy_time_cost)
@@ -213,13 +213,13 @@ def _migrate_identity_file(vault_passphrase: str, salt: bytes, legacy_time_cost:
     # Decrypt with legacy key (old format: direct master key)
     # Also try new format with legacy key (identity subkey) in case it was already partially migrated
     raw_priv = None
-    
+
     # Try old format (direct master key with legacy time_cost)
     try:
         raw_priv = bytearray(_vault_decrypt(legacy_master_key, blob))
     except InvalidTag:
         pass
-    
+
     # Try new format (identity subkey with legacy time_cost)
     if raw_priv is None:
         legacy_identity_vault_key = _derive_subkey(legacy_master_key, crypto.VAULT_KEY_IDENTITY_LABEL)
@@ -227,14 +227,14 @@ def _migrate_identity_file(vault_passphrase: str, salt: bytes, legacy_time_cost:
             raw_priv = bytearray(_vault_decrypt(legacy_identity_vault_key, blob))
         except InvalidTag:
             pass
-    
+
     # Also try current master key directly (in case time_cost wasn't actually changed)
     if raw_priv is None:
         try:
             raw_priv = bytearray(_vault_decrypt(master_vault_key, blob))
         except InvalidTag:
             pass
-    
+
     # Try new format with current master key
     if raw_priv is None:
         identity_vault_key = _derive_subkey(master_vault_key, crypto.VAULT_KEY_IDENTITY_LABEL)
@@ -242,7 +242,7 @@ def _migrate_identity_file(vault_passphrase: str, salt: bytes, legacy_time_cost:
             raw_priv = bytearray(_vault_decrypt(identity_vault_key, blob))
         except InvalidTag:
             pass
-    
+
     if raw_priv is None:
         raise ValueError("Cannot decrypt identity file with either format")
 
@@ -348,32 +348,32 @@ def _migrate_database(old_conn, old_db_key, master_vault_key: bytes):
 def _create_legacy_backups(identity_file: str, db_file: str) -> tuple[str, str]:
     """
     Create backups of legacy files before migration.
-    
+
     Returns:
         Tuple of (identity_backup_path, db_backup_path) - paths may be empty if files don't exist
     """
     backup_dir = os.path.join(os.path.dirname(identity_file), "backups")
     os.makedirs(backup_dir, exist_ok=True)
-    
+
     # Generate timestamp for unique backup names
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+
     identity_backup = ""
     db_backup = ""
-    
+
     # Backup identity.enc if it exists
     if os.path.exists(identity_file):
         identity_backup = os.path.join(backup_dir, f"identity.enc.{timestamp}.bak")
         shutil.copy2(identity_file, identity_backup)
         logger.info(f"Created identity backup: {identity_backup}")
-    
+
     # Backup redoubt.db if it exists (including -wal and -shm if present)
     if os.path.exists(db_file):
         db_backup = os.path.join(backup_dir, f"redoubt.db.{timestamp}.bak")
         shutil.copy2(db_file, db_backup)
         logger.info(f"Created database backup: {db_backup}")
-        
+
         # Also backup WAL and SHM files if they exist
         for suffix in ("-wal", "-shm"):
             src = db_file + suffix
@@ -381,7 +381,7 @@ def _create_legacy_backups(identity_file: str, db_file: str) -> tuple[str, str]:
                 dst = db_backup + suffix
                 shutil.copy2(src, dst)
                 logger.info(f"Created database {suffix} backup: {dst}")
-    
+
     return identity_backup, db_backup
 
 
@@ -393,8 +393,8 @@ def migrate_if_needed(vault_passphrase: str) -> tuple[bool, bytes]:
         (migration_performed, master_vault_key)
 
     Raises:
-        ValueError: If passphrase is wrong or files are corrupted
-        FileNotFoundError: If identity file doesn't exist (fresh identity)
+        ValueError: If the passphrase is incorrect or files are corrupted
+        FileNotFoundError: If the identity file does not exist (fresh identity)
     """
     identity_file = _get_identity_file()
     # Check if identity file exists
@@ -412,157 +412,196 @@ def migrate_if_needed(vault_passphrase: str) -> tuple[bool, bytes]:
     result = _try_load_identity_new_format(vault_passphrase)
     if result is not None:
         priv, master_key, used_time_cost = result
-        # Also verify database opens with new format
+        # Also verify that the database opens with the new format
         conn, _ = _try_open_db_new_format(master_key)
         if conn is not None:
             conn.close()
-            return False, master_key  # Already on new format with correct time_cost
+            return False, master_key  # Already migrated with the current time_cost
         if conn:
             conn.close()
 
     # Try loading with legacy parameters (time_cost=3) - legacy users
-    result = _try_load_identity_new_format(vault_passphrase, time_cost=ARGON2ID_LEGACY_TIME_COST)
+    result = _try_load_identity_new_format(
+        vault_passphrase,
+        time_cost=ARGON2ID_LEGACY_TIME_COST
+    )
+
     if result is not None:
         priv, master_key_legacy, used_time_cost = result
-        # Derive the master key with current parameters for migration
+        # Derive the master key using the current parameters for migration
         master_vault_key_current = crypto.derive_vault_key(vault_passphrase, salt)
-        
-        # Also verify database opens with legacy master key (old format)
+        # Also verify that the database opens with the legacy master key (old format)
         old_conn, old_db_key = _try_open_db_old_format(master_key_legacy)
         if old_conn is not None:
-            # Legacy format with time_cost=3 - need full migration
+            # Legacy format with time_cost=3 - full migration required
             if not _confirm_migration(
-                f"Migrazione da formato legacy (time_cost={ARGON2ID_LEGACY_TIME_COST}, chiave singola) "
-                f"a formato nuovo (time_cost={crypto.ARGON2ID_TIME_COST}, chiavi separate HKDF). "
-                f"Questa operazione riciferrà identity.enc e redoubt.db."
+                f"Migration from legacy format (time_cost={ARGON2ID_LEGACY_TIME_COST}, single key) "
+                f"to the new format (time_cost={crypto.ARGON2ID_TIME_COST}, separate HKDF-derived keys). "
+                f"Both identity.enc and redoubt.db will be re-encrypted."
             ):
-                raise ValueError("Migrazione annullata dall'utente")
-            
-            logger.info(f"Detected legacy format with Argon2id time_cost={ARGON2ID_LEGACY_TIME_COST}, migrating to time_cost={crypto.ARGON2ID_TIME_COST} and key-separated format...")
-            
-            # Create backups of legacy files BEFORE any modification
+                raise ValueError("Migration cancelled by user")
+            logger.info(
+                f"Detected legacy format with Argon2id time_cost={ARGON2ID_LEGACY_TIME_COST}. "
+                f"Migrating to time_cost={crypto.ARGON2ID_TIME_COST} and key-separated format..."
+            )
+            # Create backups of legacy files BEFORE any modifications
             identity_file = _get_identity_file()
             db_file = _get_db_file()
             identity_backup, db_backup = _create_legacy_backups(identity_file, db_file)
-
             try:
                 # Migrate identity file (also updates Argon2id time_cost)
-                _migrate_identity_file(vault_passphrase, salt, legacy_time_cost=ARGON2ID_LEGACY_TIME_COST)
-
-                # Migrate database (this re-encrypts all blobs)
+                _migrate_identity_file(
+                    vault_passphrase,
+                    salt,
+                    legacy_time_cost=ARGON2ID_LEGACY_TIME_COST
+                )
+                # Migrate database (re-encrypts all blobs)
                 _migrate_database(old_conn, old_db_key, master_vault_key_current)
-
                 logger.info("Migration completed successfully")
             except Exception as e:
-                logger.error(f"Migration failed: {e}. Legacy backups available at: {identity_backup}, {db_backup}")
+                logger.error(
+                    f"Migration failed: {e}. "
+                    f"Legacy backups are available at: {identity_backup}, {db_backup}"
+                )
                 raise
-
             return True, master_vault_key_current
         else:
-            # Try database with new format but legacy time_cost
+            # Try opening the database with the new format but legacy time_cost
             conn, _ = _try_open_db_new_format(master_key_legacy)
             if conn is not None:
                 conn.close()
-                # Identity is in new format but with legacy time_cost
-                # Just need to re-encrypt identity with current time_cost
+                # Identity is already in the new format but uses the legacy time_cost.
+                # Only the identity file needs to be re-encrypted.
                 if not _confirm_migration(
-                    f"Aggiornamento Argon2id time_cost da {ARGON2ID_LEGACY_TIME_COST} a {crypto.ARGON2ID_TIME_COST} "
-                    f"(formato chiavi già separato). Verrà ricifrato identity.enc."
+                    f"Upgrade Argon2id time_cost from {ARGON2ID_LEGACY_TIME_COST} "
+                    f"to {crypto.ARGON2ID_TIME_COST} "
+                    f"(key-separated format already in use). "
+                    f"The identity.enc file will be re-encrypted."
                 ):
-                    raise ValueError("Migrazione annullata dall'utente")
-                
-                logger.info(f"Detected new key-separated format with legacy Argon2id time_cost={ARGON2ID_LEGACY_TIME_COST}, updating to time_cost={crypto.ARGON2ID_TIME_COST}...")
-                _migrate_identity_file(vault_passphrase, salt, legacy_time_cost=ARGON2ID_LEGACY_TIME_COST)
+                    raise ValueError("Migration cancelled by user")
+                logger.info(
+                    f"Detected new key-separated format with legacy Argon2id "
+                    f"time_cost={ARGON2ID_LEGACY_TIME_COST}. "
+                    f"Updating to time_cost={crypto.ARGON2ID_TIME_COST}..."
+                )
+                _migrate_identity_file(
+                    vault_passphrase,
+                    salt,
+                    legacy_time_cost=ARGON2ID_LEGACY_TIME_COST
+                )
+
                 return True, master_vault_key_current
 
     # Try old format (pre-v2.1.1) with current time_cost
     result = _try_load_identity_old_format(vault_passphrase)
     if result is not None:
         priv, master_key, used_time_cost = result
-        # Try opening database with old format
+        # Try opening the database with the old format
         old_conn, old_db_key = _try_open_db_old_format(master_key)
         if old_conn is None:
-            # No database yet (fresh identity), just migrate identity file
+            # No database exists yet (fresh identity): migrate only the identity file
             if not _confirm_migration(
-                f"Migrazione identity.enc da formato legacy (chiave singola) a formato nuovo (chiavi separate HKDF). "
-                f"Nessun database presente."
+                f"Migration of identity.enc from the legacy format (single key) "
+                f"to the new format (separate HKDF-derived keys). "
+                f"No database file was found."
             ):
-                raise ValueError("Migrazione annullata dall'utente")
+                raise ValueError("Migration cancelled by user")
             _migrate_identity_file(vault_passphrase, salt)
             return True, master_key
 
-        # Both identity and database exist in old format - migrate both
+        # Both identity and database exist in the old format - migrate both
         if not _confirm_migration(
-            f"Migrazione da formato pre-v2.1.1 (chiave singola per identity.enc e redoubt.db) "
-            f"a formato nuovo (chiavi separate HKDF per identity e database). "
-            f"Verranno ricifrati identity.enc e tutto redoubt.db."
+            f"Migration from the pre-v2.1.1 format (single key for identity.enc and redoubt.db) "
+            f"to the new format (separate HKDF-derived keys for identity and database). "
+            f"Both identity.enc and the entire redoubt.db database will be re-encrypted."
         ):
-            raise ValueError("Migrazione annullata dall'utente")
-        
-        logger.info("Detected pre-v2.1.1 format, migrating to key-separated format...")
-
-        # Create backups of legacy files BEFORE any modification
+            raise ValueError("Migration cancelled by user")
+        logger.info(
+            "Detected pre-v2.1.1 format. Migrating to the key-separated format..."
+        )
+        # Create backups of legacy files BEFORE any modifications
         identity_file = _get_identity_file()
         db_file = _get_db_file()
         identity_backup, db_backup = _create_legacy_backups(identity_file, db_file)
-
         try:
             # Migrate identity file
             _migrate_identity_file(vault_passphrase, salt)
-
-            # Migrate database (this re-encrypts all blobs)
+            # Migrate database (re-encrypts all blobs)
             _migrate_database(old_conn, old_db_key, master_key)
-
             logger.info("Migration completed successfully")
         except Exception as e:
-            logger.error(f"Migration failed: {e}. Legacy backups available at: {identity_backup}, {db_backup}")
+            logger.error(
+                f"Migration failed: {e}. "
+                f"Legacy backups are available at: {identity_backup}, {db_backup}"
+            )
             raise
 
         return True, master_key
 
     # Try old format with legacy time_cost
-    result = _try_load_identity_old_format(vault_passphrase, time_cost=ARGON2ID_LEGACY_TIME_COST)
+    result = _try_load_identity_old_format(
+        vault_passphrase,
+        time_cost=ARGON2ID_LEGACY_TIME_COST
+    )
+
     if result is not None:
         priv, master_key_legacy, used_time_cost = result
         master_vault_key_current = crypto.derive_vault_key(vault_passphrase, salt)
-        
         old_conn, old_db_key = _try_open_db_old_format(master_key_legacy)
         if old_conn is None:
-            # No database yet (fresh identity), just migrate identity file
+            # No database exists yet (fresh identity): migrate only the identity file
             if not _confirm_migration(
-                f"Migrazione identity.enc da formato legacy (time_cost={ARGON2ID_LEGACY_TIME_COST}, chiave singola) "
-                f"a formato nuovo (time_cost={crypto.ARGON2ID_TIME_COST}, chiavi separate HKDF). "
-                f"Nessun database presente."
+                f"Migration of identity.enc from the legacy format "
+                f"(time_cost={ARGON2ID_LEGACY_TIME_COST}, single key) "
+                f"to the new format "
+                f"(time_cost={crypto.ARGON2ID_TIME_COST}, separate HKDF-derived keys). "
+                f"No database file was found."
             ):
-                raise ValueError("Migrazione annullata dall'utente")
-            _migrate_identity_file(vault_passphrase, salt, legacy_time_cost=ARGON2ID_LEGACY_TIME_COST)
+                raise ValueError("Migration cancelled by user")
+            _migrate_identity_file(
+                vault_passphrase,
+                salt,
+                legacy_time_cost=ARGON2ID_LEGACY_TIME_COST
+            )
             return True, master_vault_key_current
-        
+
         if not _confirm_migration(
-            f"Migrazione da formato pre-v2.1.1 con Argon2id time_cost={ARGON2ID_LEGACY_TIME_COST} "
-            f"a formato nuovo (time_cost={crypto.ARGON2ID_TIME_COST}, chiavi separate HKDF). "
-            f"Verranno ricifrati identity.enc e tutto redoubt.db."
+            f"Migration from the pre-v2.1.1 format with Argon2id "
+            f"time_cost={ARGON2ID_LEGACY_TIME_COST} "
+            f"to the new format (time_cost={crypto.ARGON2ID_TIME_COST}, "
+            f"separate HKDF-derived keys). "
+            f"Both identity.enc and the entire redoubt.db database will be re-encrypted."
         ):
-            raise ValueError("Migrazione annullata dall'utente")
-        
-        logger.info(f"Detected pre-v2.1.1 format with legacy Argon2id time_cost={ARGON2ID_LEGACY_TIME_COST}, migrating to time_cost={crypto.ARGON2ID_TIME_COST} and key-separated format...")
-        
+            raise ValueError("Migration cancelled by user")
+        logger.info(
+            f"Detected pre-v2.1.1 format with legacy Argon2id "
+            f"time_cost={ARGON2ID_LEGACY_TIME_COST}. "
+            f"Migrating to time_cost={crypto.ARGON2ID_TIME_COST} "
+            f"and key-separated format..."
+        )
+
         identity_file = _get_identity_file()
         db_file = _get_db_file()
         identity_backup, db_backup = _create_legacy_backups(identity_file, db_file)
 
         try:
-            _migrate_identity_file(vault_passphrase, salt, legacy_time_cost=ARGON2ID_LEGACY_TIME_COST)
+            _migrate_identity_file(
+                vault_passphrase,
+                salt,
+                legacy_time_cost=ARGON2ID_LEGACY_TIME_COST
+            )
             _migrate_database(old_conn, old_db_key, master_vault_key_current)
             logger.info("Migration completed successfully")
         except Exception as e:
-            logger.error(f"Migration failed: {e}. Legacy backups available at: {identity_backup}, {db_backup}")
+            logger.error(
+                f"Migration failed: {e}. "
+                f"Legacy backups are available at: {identity_backup}, {db_backup}"
+            )
             raise
 
         return True, master_vault_key_current
 
-    raise ValueError("Wrong passphrase or corrupted identity file")
-
+    raise ValueError("Incorrect passphrase or corrupted identity file")
 
 def load_identity_with_migration(vault_passphrase: str):
     """

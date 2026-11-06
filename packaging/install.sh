@@ -6,11 +6,11 @@ APP_DIR="$HOME/.redoubt"
 APPLICATIONS_DIR="$HOME/.local/share/applications"
 FONTS_DIR="$HOME/.local/share/fonts/MesloLGS"
 
-APP_URL="https://github.com/FreyFlyy/Redoubt/releases/download/v2.1.1/Redoubt-2.1.1-x86_64.AppImage"
+APP_URL="https://github.com/FreyFlyy/Redoubt/releases/download/v2.2.0/Redoubt-2.2.0-x86_64.AppImage"
 ICON_URL="https://raw.githubusercontent.com/FreyFlyy/Redoubt/main/packaging/redoubt.png"
 FONT_BASE_URL="https://raw.githubusercontent.com/FreyFlyy/Redoubt/main/packaging/fonts"
 
-APP_FILE="$APP_DIR/Redoubt-2.1.1-x86_64.AppImage"
+APP_FILE="$APP_DIR/Redoubt-2.2.0-x86_64.AppImage"
 ICON_FILE="$APP_DIR/redoubt.png"
 DESKTOP_FILE="$APPLICATIONS_DIR/Redoubt.desktop"
 

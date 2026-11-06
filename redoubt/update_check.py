@@ -31,7 +31,7 @@ class UpdateCheckError(Exception):
 
 
 def parse_version(text) -> tuple:
-    """'2.1.1' or 'v2.1.1' -> (2, 1, 1). Anything else (pre-release suffixes included) is rejected, not guessed"""
+    """'x.y.z' or 'vx.y.z' -> (x, y, z). Anything else (pre-release suffixes included) is rejected, not guessed"""
     if not isinstance(text, str):
         raise UpdateCheckError("Version is not a string")
     match = _VERSION_RE.fullmatch(text.strip())
