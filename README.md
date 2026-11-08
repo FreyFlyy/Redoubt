@@ -49,6 +49,7 @@ Redoubt separates its functionality into independent modules:
 | `identity.py` | Local identity and vault management |
 | `contact_validation.py` | Contact input validation shared by the CLI and the UI form |
 | `network.py` | Peer-to-peer networking |
+| `migration.py` | Database and identity format migration handler (from v2.1.1 to v2.2.0) |
 | `protocol.py` | Communication protocol and packet handling |
 | `storage.py` | Encrypted persistent storage |
 | `secure_memory.py` | Memory locking and buffer zeroization |
