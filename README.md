@@ -297,9 +297,9 @@ The resulting AppImage is placed in the repository root.
 The same contact operations are still available from the command line:
 
 ```bash
-./Redoubt-2.2.0-*.AppImage --add-contact
-./Redoubt-2.2.0-*.AppImage --list-contacts
-./Redoubt-2.2.0-*.AppImage --remove-contact
+./Redoubt-*-*.AppImage --add-contact
+./Redoubt-*-*.AppImage --list-contacts
+./Redoubt-*-*.AppImage --remove-contact
 ```
 
 `--remove-contact` also requires the contact's public key as proof of possession.
@@ -310,7 +310,7 @@ The same contact operations are still available from the command line:
 
 ## Roadmap
 
-### V2.2.0: Tor/onion net
+### V2.3.0: Tor/onion net
 
 - Optional Tor/onion networking.
 - Separation of LAN and onion contacts.
