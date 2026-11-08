@@ -32,7 +32,7 @@ class UpdateCheckError(Exception):
 
 
 def parse_version(text) -> tuple:
-    """'x.y.z' or 'vx.y.z' -> (x, y, z). Anything else (pre-release suffixes included) is rejected, not guessed"""
+    """'x.y.z' or 'vx.y.z' -> (x, y, z). Anything else (pre-release suffixes included) is rejected, as pre-releases are NOT ready for deployment"""
     if not isinstance(text, str):
         raise UpdateCheckError("Version is not a string")
     match = _VERSION_RE.fullmatch(text.strip())
