@@ -11,6 +11,7 @@ import http.client
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -59,8 +60,12 @@ def fetch_latest_version(timeout: float = TIMEOUT_SECONDS) -> str:
         "Accept": "application/vnd.github+json",
     })
 
+    parsed = urllib.parse.urlparse(API_URL)
+    if parsed.scheme not in ("https", "http"):
+        raise UpdateCheckError(f"Unsupported URL scheme: {parsed.scheme!r}")
+
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # TLS certificate verification is on by default
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 - scheme validated above; API_URL is a hardcoded https GitHub endpoint
             raw = response.read(MAX_RESPONSE_BYTES + 1)
     except (OSError, ValueError, http.client.HTTPException) as e:   # URLError, HTTPError, SSL errors and timeouts are OSError
         raise UpdateCheckError(f"Request failed: {e}") from e
