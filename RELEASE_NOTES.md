@@ -9,8 +9,6 @@
 - Added `CONTRIBUTING.md` with development setup and contribution guidelines.
 - Added `RELEASE_WORKFLOW.md` documenting versioning, the release procedure, artifact building (Linux AppImage / Windows ZIP), testing requirements, and release quality criteria.
 - Documented the `migration.py` module in the README module overview.
-- Updated `SECURITY.md` to remove the vault key reuse limitation, which was resolved in 2.2.0.
-- Made README AppImage CLI examples version-agnostic instead of pinned to `2.2.0`.
 - Updated the README roadmap: Tor/onion networking moved to v2.3.0; post-quantum cryptography remains a v3.0.0 goal.
 
 ## Compatibility & migration
