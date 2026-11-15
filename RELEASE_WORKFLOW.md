@@ -334,53 +334,79 @@ Every release candidate must undergo independent artifact verification.
 
 ---
 
-## 7. Stable Release Promotion
+## 7. Stable Release Preparation & Promotion
 
-A stable release is a promotion of an already validated release candidate.
+A stable release must be built from a dedicated stable-version commit.
 
-It must not introduce additional code changes or rebuild the application from a potentially different environment.
+The final validated release candidate and the stable release must have different version identifiers in the project metadata. Therefore, the stable tag must not reference the release candidate commit.
 
-### 7.1. Promotion requirements
+The release candidate validates the application at its candidate version. After successful validation, a separate commit must remove the pre-release suffix from all project version references.
 
-Before stable publication, verify that:
+### 7.1. Stable version preparation
 
-1. The final release candidate passed the complete CI/CD workflow.
-2. All required artifacts were successfully generated.
-3. Linux and Windows artifact verification succeeded.
-4. All mandatory test requirements were satisfied.
-5. Release notes are complete and accurate.
-6. The candidate commit is the intended stable release commit.
+After the final release candidate has passed all mandatory validation:
 
-### 7.2. Stable tag creation
-
-The stable tag must reference the exact same commit as the final validated release candidate.
+1. Update every project version reference from `X.Y.Z-rc.N` to `X.Y.Z`.
+2. Verify that no release-candidate suffix remains in application or packaging version metadata.
+3. Update the release notes for the stable release, describing changes since the previous stable release.
+4. Review the complete diff and verify that the only source changes are those required to prepare the stable version.
+5. Commit and push the stable-version changes to `main`.
 
 Example:
 
 ```text
-v2.2.2-rc.3 ──┐
-              ├── Same commit SHA
-v2.2.2 ───────┘
+Validated candidate: v2.3.0-rc.2
+Project version:     2.3.0-rc.2
+
+Stable preparation commit:
+Project version:     2.3.0
 ```
 
-Create the stable tag:
+The stable preparation commit must not introduce application functionality changes, bug fixes, dependency changes, or build-configuration changes. If any such changes are necessary, a new release candidate must be created and fully validated first.
+
+### 7.2. Stable tag creation
+
+Create a new annotated stable tag pointing to the stable-version preparation commit:
 
 ```bash
-git tag -a v2.2.2 -m "Release v2.2.2"
-git push origin v2.2.2
+git tag -a v2.3.0 -m "Release v2.3.0"
+git push origin v2.3.0
 ```
 
-Verify that both tags reference the same commit.
+The stable tag must reference the commit containing the stable version metadata (`X.Y.Z`), not the preceding release candidate commit (`X.Y.Z-rc.N`).
 
-### 7.3. Stable publication
+Verify the tag and project version:
 
-Only after all promotion requirements have been satisfied may the GitHub stable release be published.
+```bash
+git show v2.3.0:pyproject.toml
+git show v2.3.0:redoubt/__init__.py
+git rev-parse v2.3.0^{commit}
+```
 
-The release must:
+The stable tag must be immutable once pushed.
+
+### 7.3. Stable build and publication
+
+Pushing the stable tag must immediately trigger the stable release CI/CD workflow.
+
+The workflow must independently:
+
+- Verify that the tag version matches all project version references.
+- Run the complete automated test suite.
+- Build the Linux and Windows stable artifacts using the required build environments.
+- Generate SHA-256 checksums.
+- Validate the generated artifacts.
+- Create the GitHub stable Release and upload the artifacts, checksums, and release notes after all mandatory jobs succeed.
+
+Stable artifacts must be built from the exact commit referenced by the stable tag. They must not be relabelled or reused from the release candidate, because the candidate and stable builds have different embedded version identifiers.
+
+No commits or source modifications may be introduced between stable tag creation and GitHub Release publication. If the stable workflow fails because source changes are required, prepare and validate a new release candidate; do not move or recreate the published stable tag.
+
+The GitHub Release must:
 
 - Use the corresponding stable Git tag.
-- Include the validated Linux and Windows artifacts.
-- Include the final release notes.
+- Include the stable Linux and Windows artifacts.
+- Include the final release notes and SHA-256 checksums.
 - Be marked as a stable release, not a pre-release.
 
 ---
@@ -389,29 +415,33 @@ The release must:
 
 GitHub Releases are the official distribution mechanism for Redoubt binaries and release documentation.
 
-A GitHub Release must only be created after the corresponding release tag and all required validation procedures have been completed.
+A GitHub Release must be created automatically by the release CI/CD workflow after the corresponding tag has passed all required validation procedures. Tag creation triggers the workflow; publication occurs immediately after all mandatory jobs succeed.
 
 ### 8.1. Release creation
 
 Create the GitHub Release using the GitHub CLI (`gh`).
 
-Stable release example:
+The release workflow must create the GitHub Release after successful validation. The following commands illustrate the equivalent manual operation for diagnostic or recovery purposes; they are not a substitute for the automated workflow.
+
+Stable release:
 
 ```bash
-gh release create v2.2.2 \
-  Redoubt-2.2.2-x86_64.AppImage \
-  Redoubt-2.2.2-windows-x86_64.zip \
-  --title "Redoubt 2.2.2" \
+gh release create v2.3.0 \
+  Redoubt-2.3.0-x86_64.AppImage \
+  Redoubt-2.3.0-windows-x86_64.zip \
+  SHA256SUMS \
+  --title "Redoubt 2.3.0" \
   --notes-file RELEASE_NOTES.md
 ```
 
-Release candidate example:
+Release candidate:
 
 ```bash
-gh release create v2.2.2-rc.1 \
-  Redoubt-2.2.2-rc.1-x86_64.AppImage \
-  Redoubt-2.2.2-rc.1-windows-x86_64.zip \
-  --title "Redoubt 2.2.2-rc.1" \
+gh release create v2.3.0-rc.2 \
+  Redoubt-2.3.0-rc.2-x86_64.AppImage \
+  Redoubt-2.3.0-rc.2-windows-x86_64.zip \
+  SHA256SUMS \
+  --title "Redoubt 2.3.0-rc.2" \
   --notes-file RELEASE_NOTES.md \
   --prerelease
 ```
@@ -427,7 +457,11 @@ Every GitHub Release must:
 - Include accurate release notes.
 - Include SHA-256 checksums for all distributable artifacts.
 
-Release candidates must be explicitly marked as pre-releases using
+Release candidates must be explicitly marked as pre-releases using `--prerelease`.
+
+Stable releases must not use the `--prerelease` flag.
+
+The CI/CD workflow must have the permissions required to publish releases (including `contents: write`). The workflow must not publish a GitHub Release if any mandatory validation or build job fails.
 
 ## 8.3. Release Notes
 
@@ -505,48 +539,50 @@ A green CI status must correspond to the exact commit and artifacts intended for
 
 ---
 
-## 10. Final Release Checklist
+## 10.1. Release candidate tag checklist
 
-A release is authorized for stable publication only when every mandatory requirement below has been satisfied.
+A release candidate tag may be created only when every requirement below is satisfied:
 
-### Source integrity
-
-- [ ] All intended changes are committed and pushed to `main`.
+- [ ] All intended application and build changes are committed and pushed to `main`.
 - [ ] The working tree is clean.
-- [ ] The release tag references the intended commit.
-- [ ] The published tag is immutable.
-- [ ] The project version matches the release tag.
+- [ ] All project version references contain the intended `X.Y.Z-rc.N` version.
+- [ ] Release notes for the candidate are prepared.
+- [ ] All required release assets can be built from the tagged commit.
 
-### Automated validation
+Only after these checks and the required builds are complete may the release candidate tag be created.
 
-- [ ] Complete test suite passes.
-- [ ] No unexplained failures or execution errors remain.
-- [ ] No unexplained skips or unexpected XPASS results remain.
-- [ ] Expected failures are documented.
-- [ ] CI/CD validation succeeds for the exact candidate commit.
+Creating the tag immediately triggers the release candidate CI/CD workflow. No commits or source modifications may be introduced after the tag is created.
 
-### Packaging
+## 10.2. Release candidate validation checklist
 
-- [ ] Linux AppImage successfully built.
-- [ ] Windows ZIP distribution successfully built.
+A release candidate is considered validated only when every mandatory requirement below is satisfied:
+
+- [ ] Complete automated test suite passes.
+- [ ] Linux AppImage successfully built, launched, and tested.
+- [ ] Windows ZIP distribution successfully built, launched, and tested.
+- [ ] Core functionality verified on both platforms.
+- [ ] Encrypted storage and cryptographic operations verified.
 - [ ] Correct architecture and runtime dependencies verified.
 - [ ] No unintended files or generated artifacts included.
 - [ ] Build environments and versions recorded.
+- [ ] CI/CD validation succeeds for the exact candidate tag and commit.
 
-### Artifact verification
+## 10.3. Stable release checklist
 
-- [ ] Linux application successfully launched and tested.
-- [ ] Windows application successfully launched and tested.
-- [ ] Core functionality verified on both platforms.
-- [ ] Encrypted storage and cryptographic operations verified.
+A stable release may be published only when every mandatory requirement below is satisfied:
 
-### Stable publication
+- [ ] Final `vX.Y.Z-rc.N` candidate has passed all mandatory validation.
+- [ ] All project version references have been changed from `X.Y.Z-rc.N` to `X.Y.Z`.
+- [ ] The stable-version preparation commit contains no application functionality, dependency, or build-configuration changes.
+- [ ] Stable release notes accurately describe changes since the latest stable release.
+- [ ] The working tree is clean and the stable preparation commit is pushed to `main`.
+- [ ] Stable tag `vX.Y.Z` references the stable-version preparation commit, not the RC commit.
+- [ ] Stable tag version matches all project version references.
+- [ ] Stable CI/CD workflow passes all mandatory validation and build jobs.
+- [ ] Stable Linux and Windows artifacts are built from the exact stable tag commit.
+- [ ] Stable artifacts contain the stable `X.Y.Z` version, without an RC suffix.
+- [ ] GitHub Release is created automatically after successful validation.
+- [ ] GitHub Release is correctly marked as stable, not pre-release.
+- [ ] Published assets, checksums, tag, and release notes are verified.
 
-- [ ] Final candidate has passed all mandatory validation.
-- [ ] Stable tag references the exact final candidate commit.
-- [ ] Stable artifacts are identical to the validated candidate artifacts.
-- [ ] Release notes accurately describe the changes.
-- [ ] Stable release assets and checksums are present.
-- [ ] GitHub release is correctly marked as stable.
-
-**A single unchecked mandatory requirement means the release is not ready for stable publication.**
+No commits or source modifications may occur between stable tag creation and GitHub Release publication. If source changes are required after tagging, the tag must not be moved or reused; the release process must be restarted with a new valid version identifier.

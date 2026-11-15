@@ -330,11 +330,6 @@ The same contact operations are still available from the command line:
 
 ## Roadmap
 
-### V2.3.0: Tor/onion net (implemented, unreleased)
-
-- Optional Tor/onion networking (off by default).
-- Separation of IP and onion contacts, with guided setup of your own `.onion` address and Tor installation.
-
 ### V3.0.0: System-level improvements
 
 - Rewrite security-critical components in a memory-safe language.
