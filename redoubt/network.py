@@ -13,7 +13,9 @@ import socket
 import threading
 from dataclasses import dataclass
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from . import contact_validation as cv
 from . import crypto
+from . import onion as onion_mod
 from . import protocol as proto
 from . import ratchet as ratchet_mod
 from . import ratelimit
@@ -30,6 +32,12 @@ DEFAULT_PORT = 60717    # generally considered ephemeral (to blend in), also lee
 CONNECT_TIMEOUT = 10     # socket timeout for TCP connection
 WIRE_KEY_EXCHANGE_TIMEOUT = 10   # socket timeout for key exchange
 HANDSHAKE_TIMEOUT = 10  # socket timeout for handshake completion
+
+# Onion (Tor) timeouts: building a circuit to an onion service and every round trip through 6 relays are much slower than a LAN/clearnet TCP
+ONION_CONNECT_TIMEOUT = 60      # CONNECT through the SOCKS proxy (circuit + introduction + rendezvous)
+ONION_HANDSHAKE_TIMEOUT = 30    # wire key exchange and HELLO/HELLO_ACK over an onion connection
+ONION_RETRY_INTERVAL = 60       # seconds between presence attempts to an onion contact with no live session (do not hammer the HSDirs)
+ONION_CONN_MAX_PER_WINDOW = 20  # every inbound onion connection comes from Tor on 127.0.0.1: ONE shared bucket, so a higher cap than a single IP
 
 # Connection limiting
 CONN_MAX_PER_IP = 5     # max number of connections an IP can have on a sliding window
@@ -58,6 +66,10 @@ class PeerMismatch(Exception):
     """Recieved fingerprint does not match expected one"""
 
 
+class OnionUnavailable(ConnectionError):
+    """An onion contact was dialed while Tor is off (or not ready yet)"""
+
+
 ## Key exchange result
 
 @dataclass
@@ -72,9 +84,10 @@ class KeyExchange:
 ## Session class
 
 class Session:
-    def __init__(self, sock, peer_fingerprint, ratchet, wire_key):
+    def __init__(self, sock, peer_fingerprint, ratchet, wire_key, contact_id=None):
         self.sock = sock
-        self.peer_fingerprint = peer_fingerprint
+        self.peer_fingerprint = peer_fingerprint    # the REAL fingerprint of the peer (what its packets claim and its key proves)
+        self.contact_id = contact_id or peer_fingerprint    # the contact this session belongs to (differs from the fingerprint for onion contacts)
         self.ratchet = ratchet    # Double Ratchet state (ALWAYS access it while holding self.lock)
         self.wire_key = wire_key    # ciphers entre binary frame
         self.seen_msg_ids = set()   # set of seen message ids, to avoid double ratchet when clearing the chat with an already seen message without the other peer getting ACK (this makes them re-transmit and waste a second step, misaligning the entire chain)
@@ -147,6 +160,12 @@ class NetworkManager:
         self._stop = threading.Event()
         self.listen_port = None  # set by start_listener()
 
+        # Onion (Tor): all None/empty while the "Use Tor/Onion network" setting is off
+        self._onion_listener_sock = None
+        self.onion_local_port = None    # loopback port the onion service forwards to (set by start_onion_listener())
+        self._onion_socks = None        # (host, port) of Tor's SocksPort: set <=> onion contacts can be dialed
+        self._onion_last_attempt: dict = {}
+
         self.peer_presence = {}
 
         # Presence fan-out (fire-and-forget): contacts with a presence attempt still running, shutdown flag
@@ -164,6 +183,7 @@ class NetworkManager:
 
         # Limiting guards
         self._conn_flood_guard = ratelimit.ConnectionFloodGuard(CONN_MAX_PER_IP, CONN_WINDOW_SECONDS)
+        self._onion_flood_guard = ratelimit.ConnectionFloodGuard(ONION_CONN_MAX_PER_WINDOW, CONN_WINDOW_SECONDS)
         self._session_cap = ratelimit.GlobalSessionCap(MAX_GLOBAL_SESSIONS)
 
 
@@ -171,8 +191,10 @@ class NetworkManager:
 
     def _get_or_connect(self, contact_row) -> Session:
         """Connect to a contact and return the session"""
-        # Get contact info
+        # Get contact info (the first field is the contact id: the fingerprint for IPv4 contacts, fingerprint + "-onion" for onion ones)
         fp, _name, ip, port, pubkey_b64 = contact_row
+        onion = cv.is_onion_contact_id(fp)
+        expected_fp = cv.contact_fingerprint(fp)
 
         # Get session if already existing
         with self.sessions_lock:
@@ -188,32 +210,21 @@ class NetworkManager:
             candidate_static_pub_raw = None
             logger.warning(f"Contact PubKey not valid base64 ({fp[:16]}...)")
 
-        # Try connecting to contact IP
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(CONNECT_TIMEOUT)
-        try:
-            sock.connect((ip, port))
-        except Exception as e:
-            sock.close()
-            if isinstance(e, ConnectionRefusedError):   # refused = peer offline (normal); type check, not str(): Windows messages are localized
-                pass    # do nothing
-            else:
-                self.on_statusbar_message(fp, f"Connection to {ip}:{port} failed: {e}")
-            raise
-        sock.settimeout(None)
+        # Try connecting to the contact: straight TCP to its IP, or through Tor's SOCKS proxy to its .onion address
+        sock = self._connect_onion(fp, ip, port) if onion else self._connect_ip(fp, ip, port)
 
         # Try handshake
         try:
-            their_fp, _their_name, ratchet, _their_listen_port, wire_key = self._do_handshake_outbound(sock, candidate_static_pub_raw)
+            their_fp, _their_name, ratchet, _their_listen_port, wire_key = self._do_handshake_outbound(sock, candidate_static_pub_raw, contact_id=fp, onion=onion)
         except Exception:
             sock.close()
             raise
-        if their_fp != fp:  # Fingerprint mismatch
+        if their_fp != expected_fp:  # Fingerprint mismatch
             sock.close()
-            raise PeerMismatch(f"Expected {fp[:16]}..., got {their_fp[:16]}...")
+            raise PeerMismatch(f"Expected {expected_fp[:16]}..., got {their_fp[:16]}...")
 
         # Define and install session
-        session = Session(sock, fp, ratchet, wire_key)
+        session = Session(sock, their_fp, ratchet, wire_key, contact_id=fp)
         discarded = self._install_session(fp, session, is_inbound=False)
         if discarded:   # new session was discarded (old still alive)
             with self.sessions_lock:    # get old session
@@ -229,43 +240,155 @@ class NetworkManager:
         return session
 
 
+    ## Connect (outbound transports)
+
+    def _connect_ip(self, cid, ip, port):
+        """Plain TCP connection to a contact's IPv4 address"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(CONNECT_TIMEOUT)
+        try:
+            sock.connect((ip, port))
+        except Exception as e:
+            sock.close()
+            if isinstance(e, ConnectionRefusedError):   # refused = peer offline (normal); type check, not str(): Windows messages are localized
+                pass    # do nothing
+            else:
+                self.on_statusbar_message(cid, f"Connection to {ip}:{port} failed: {e}")
+            raise
+        sock.settimeout(None)
+        return sock
+
+    def _connect_onion(self, cid, address, port):
+        """Connection to a contact's .onion address through Tor's SOCKS proxy (Tor resolves the name, this machine never does)"""
+        socks = self._onion_socks
+        if socks is None:
+            raise OnionUnavailable("Tor is off: enable \"Use Tor/Onion network\" in Settings to reach onion contacts")
+        try:
+            return onion_mod.socks5_connect(socks, address, port, ONION_CONNECT_TIMEOUT, ONION_HANDSHAKE_TIMEOUT)
+        except onion_mod.SocksError as e:
+            if not e.peer_offline:  # an offline onion service is normal, anything else is worth telling
+                self.on_statusbar_message(cid, f"Onion connection to {address[:12]}... failed: {e}")
+            raise
+        except OSError as e:
+            self.on_statusbar_message(cid, f"Cannot reach the Tor SOCKS proxy: {e}")
+            raise
+
+
     ## Listen
+
+    @staticmethod
+    def _bind_listener(host, port):
+        """Listening socket on host:port (exclusive bind on Windows, see below)"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform == "win32":
+                # On Windows SO_REUSEADDR lets ANOTHER process bind the same port (traffic hijack); exclusive bind is the safe equivalent
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+            sock.listen(20)
+            sock.settimeout(1.0)
+        except OSError:
+            sock.close()
+            raise
+        return sock
 
     def start_listener(self, port=DEFAULT_PORT):
         """Start socket listener on a specific port and thread"""
         self.listen_port = port
-        self._listener_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if sys.platform == "win32":
-            # On Windows SO_REUSEADDR lets ANOTHER process bind the same port (traffic hijack); exclusive bind is the safe equivalent
-            self._listener_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        else:
-            self._listener_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._listener_sock.bind(("0.0.0.0", port))
-        self._listener_sock.listen(20)
-        self._listener_sock.settimeout(1.0)
+        self._listener_sock = self._bind_listener("0.0.0.0", port)
 
         t = threading.Thread(target=self._listen_loop, daemon=True)
         t.start()
         return t
 
-    def _listen_loop(self):
-        """Loop for socket connection listening"""
+    def start_onion_listener(self, port=0) -> int:
+        """Start the listener the onion service forwards to. LOOPBACK ONLY: it must be reachable through Tor and nothing else
+        (a LAN peer must not be able to use it to skip the IP-contact checks). Returns the port actually bound"""
+        if self._onion_listener_sock is not None:
+            return self.onion_local_port
+        sock = self._bind_listener("127.0.0.1", port)
+        self._onion_listener_sock = sock
+        self.onion_local_port = sock.getsockname()[1]
+        threading.Thread(target=self._listen_loop, args=(sock, True), daemon=True).start()
+        return self.onion_local_port
+
+    def enable_onion_dialing(self, socks_addr):
+        """Tor is ready: onion contacts can now be dialed through its SOCKS proxy"""
+        self._onion_socks = tuple(socks_addr)
+
+    @property
+    def onion_ready(self) -> bool:
+        return self._onion_socks is not None
+
+    def stop_onion(self):
+        """Turn the whole onion side off: no more dialing, listener closed, live onion sessions closed (contacts and chats are kept)"""
+        self._onion_socks = None
+        sock, self._onion_listener_sock = self._onion_listener_sock, None
+        self.onion_local_port = None
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)     # close() alone leaves the kernel socket accepting while another thread sits in accept()
+            except OSError:
+                pass    # not supported / already down on some platforms: close() below still ends it, at worst after the accept timeout
+            try:
+                sock.close()
+            except OSError:
+                logger.exception("OS Error: onion listener close()")
+        with self.sessions_lock:
+            doomed = [s for cid, s in self.sessions.items() if cv.is_onion_contact_id(cid)]
+        for s in doomed:    # their _read_loop notices, cleans up and reports the contact offline
+            s.alive = False
+            s.destroy()
+            try:
+                s.sock.shutdown(socket.SHUT_RDWR)   # close() alone would not wake a thread blocked in recv()
+            except OSError:
+                pass
+            try:
+                s.sock.close()
+            except OSError:
+                pass
+        self._onion_last_attempt.clear()
+
+    def _onion_due(self, cid) -> bool:
+        """Should presence try this onion contact now? Never while Tor is off; with no live session, at most every ONION_RETRY_INTERVAL"""
+        if self._onion_socks is None:
+            return False
+        with self.sessions_lock:
+            live = self.sessions.get(cid)
+        if live is not None and live.alive:
+            return True     # a live session: presence is just a write
+        now = time.monotonic()
+        last = self._onion_last_attempt.get(cid)
+        if last is not None and now - last < ONION_RETRY_INTERVAL:
+            return False
+        self._onion_last_attempt[cid] = now
+        return True
+
+    def _listen_loop(self, listener=None, onion=False):
+        """Loop for socket connection listening (the classic IP listener, or the loopback one behind the onion service)"""
+        listener = listener or self._listener_sock
+        guard = self._onion_flood_guard if onion else self._conn_flood_guard
+        origin = "onion service" if onion else None     # an onion peer has no address of its own: Tor connects from 127.0.0.1
         while not self._stop.is_set():   # not stopped
-            if self._listener_sock is None:
+            if listener is None or (onion and self._onion_listener_sock is not listener):
                 break
             try:    # try accepting any connection
-                conn, addr = self._listener_sock.accept()
+                conn, addr = listener.accept()
             except TimeoutError:  # no connection tried. Not a problem, restart
                 continue
             except (ConnectionAbortedError, ConnectionResetError):  # peer gone before accept(): not fatal (common on Windows, ECONNABORTED on Linux)
                 continue
             except OSError:
-                logger.exception("OS error in _listen_loop: conn, addr = self._listener_sock.accept()")
+                if onion and self._onion_listener_sock is not listener:     # closed by stop_onion(): expected
+                    break
+                logger.exception("OS error in _listen_loop: conn, addr = listener.accept()")
                 break
 
             # Per-IP connection flood protection
-            if not self._conn_flood_guard.allow(addr[0]):
-                logger.warning(f"Connection flood protection: too many tried connections from {addr[0]}, new connection dropped")
+            if not guard.allow(addr[0]):
+                logger.warning(f"Connection flood protection: too many tried connections from {origin or addr[0]}, new connection dropped")
                 try:    # close connection
                     conn.close()
                 except OSError:
@@ -276,19 +399,19 @@ class NetworkManager:
             with self.sessions_lock:
                 current = len(self.sessions)
             if not self._session_cap.allow(current):
-                logger.warning(f"Global session cap ({MAX_GLOBAL_SESSIONS}) reached, inbound from {addr[0]} dropped pre-handshake")
+                logger.warning(f"Global session cap ({MAX_GLOBAL_SESSIONS}) reached, inbound from {origin or addr[0]} dropped pre-handshake")
                 try:
                     conn.close()
                 except OSError:
                     pass
                 continue
 
-            threading.Thread(target=self._handle_inbound, args=(conn, addr), daemon=True).start()
+            threading.Thread(target=self._handle_inbound, args=(conn, addr, onion), daemon=True).start()
 
 
     ## Wire key
 
-    def _establish_wire_key_candidates(self, sock, candidate_pubkeys_raw: list[bytes]):
+    def _establish_wire_key_candidates(self, sock, candidate_pubkeys_raw: list[bytes], timeout=WIRE_KEY_EXCHANGE_TIMEOUT):
         """
         Like _establish_wire_key, but it calculates a KeyExchange for all possible contacts
         (e.g. in the case of duplicated IPs with LANs). Returns (fingerprint, KeyExchange)
@@ -305,7 +428,7 @@ class NetworkManager:
         sock.sendall(eph_pub_raw)
 
         # Get peer PubKey
-        their_eph_raw = proto.recv_exact(sock, 32, timeout=WIRE_KEY_EXCHANGE_TIMEOUT)
+        their_eph_raw = proto.recv_exact(sock, 32, timeout=timeout)
         if their_eph_raw is None:
             raise proto.InvalidPacket("Wire key exchange timeout")
         their_eph_pub = crypto.public_key_from_raw(their_eph_raw)
@@ -329,7 +452,7 @@ class NetworkManager:
 
         return candidates
 
-    def _read_packet_multi_key(self, sock, candidates: list[tuple[str, KeyExchange]]):
+    def _read_packet_multi_key(self, sock, candidates: list[tuple[str, KeyExchange]], timeout=HANDSHAKE_TIMEOUT):
         """
         Like proto.read_packet but tries more (fingerprint, wire_key) candidates on the
         same frame. Returns (packet, KeyExchange, authenticated_fp): authenticated_fp is the
@@ -346,7 +469,7 @@ class NetworkManager:
         if length > proto.MAX_FRAME_SIZE:
             raise proto.InvalidPacket("Packet exceeds the maximum allowed size")
 
-        raw = proto.recv_exact(sock, length, timeout=HANDSHAKE_TIMEOUT)
+        raw = proto.recv_exact(sock, length, timeout=timeout)
         if raw is None:
             return None
         if len(raw) < proto.WIRE_NONCE_SIZE:
@@ -366,7 +489,7 @@ class NetworkManager:
 
         raise proto.InvalidPacket("No candidate key could decrypt HELLO (unknown sender or IP not recognized)")
 
-    def _establish_wire_key(self, sock, candidate_static_pub_raw: bytes, is_initiator: bool):
+    def _establish_wire_key(self, sock, candidate_static_pub_raw: bytes, is_initiator: bool, timeout=WIRE_KEY_EXCHANGE_TIMEOUT):
         """
         Establishes an authenticated wire key and returns a KeyExchange (wire key + ephemeral secrets for the ratchet).
         Requires both peers have eachother's Public Keys.
@@ -384,7 +507,7 @@ class NetworkManager:
         sock.sendall(eph_pub_raw)
 
         # Receive peer ephemeral key
-        their_eph_raw = proto.recv_exact(sock, 32, timeout=WIRE_KEY_EXCHANGE_TIMEOUT)
+        their_eph_raw = proto.recv_exact(sock, 32, timeout=timeout)
 
         if their_eph_raw is None:   # timeout, 32 bytes not received
             raise proto.InvalidPacket("wire key exchange timeout")
@@ -419,10 +542,13 @@ class NetworkManager:
 
     ## Handshake
 
-    def _do_handshake_outbound(self, sock, candidate_static_pub_raw: bytes):
-        """Prepare and initiate handshake"""
+    def _do_handshake_outbound(self, sock, candidate_static_pub_raw: bytes, contact_id=None, onion=False):
+        """Prepare and initiate handshake (contact_id: the contact we dialed, defaults to the fingerprint the peer announces)"""
+        wire_timeout = ONION_HANDSHAKE_TIMEOUT if onion else WIRE_KEY_EXCHANGE_TIMEOUT
+        hello_timeout = ONION_HANDSHAKE_TIMEOUT if onion else HANDSHAKE_TIMEOUT
+
         # Establish wire key
-        kx = self._establish_wire_key(sock, candidate_static_pub_raw, is_initiator=True)
+        kx = self._establish_wire_key(sock, candidate_static_pub_raw, is_initiator=True, timeout=wire_timeout)
         wire_key = kx.wire_key
 
         nonce_mine = os.urandom(16)
@@ -440,7 +566,7 @@ class NetworkManager:
         sock.sendall(proto.frame(proto.add_padding(hello), wire_key))
 
         # Try to receive HELLO_ACK
-        sock.settimeout(HANDSHAKE_TIMEOUT)
+        sock.settimeout(hello_timeout)
         try:
             ack, _ = proto.read_packet(sock, wire_key)
         finally:
@@ -456,29 +582,38 @@ class NetworkManager:
             )
 
         # Check contact exists
-        if self.storage.get_contact(ack["fingerprint"]) is None:
+        if self.storage.get_contact(contact_id or ack["fingerprint"]) is None:
             raise PeerMismatch(
                 f"Peer is not in the contact list: {ack["fingerprint"][:16]}..."
             )
 
-        return self._finalize_handshake(ack, nonce_mine, kx, is_initiator=True) + (wire_key,)
+        return self._finalize_handshake(ack, nonce_mine, kx, is_initiator=True, contact_id=contact_id) + (wire_key,)
 
-    def _do_handshake_inbound(self, sock, addr):
-        """Prepare to receive handshake"""
-        candidates = self.storage.get_contact_by_ip(addr[0])
+    def _do_handshake_inbound(self, sock, addr, onion=False):
+        """Prepare to receive handshake. From an IP the candidates are the contacts saved with that IP; from the onion service
+        there is no source address to narrow them down (Tor connects from 127.0.0.1), so they are ALL the onion contacts"""
+        if onion:
+            candidates = self.storage.get_onion_contacts()
+            origin = "the onion service"
+        else:
+            candidates = [row for row in self.storage.get_contact_by_ip(addr[0]) if not cv.is_onion_contact_id(row[0])]
+            origin = addr[0]
+        wire_timeout = ONION_HANDSHAKE_TIMEOUT if onion else WIRE_KEY_EXCHANGE_TIMEOUT
+        hello_timeout = ONION_HANDSHAKE_TIMEOUT if onion else HANDSHAKE_TIMEOUT
+
         candidate_pubkeys = []
         for row in candidates:
             try:
                 candidate_pubkeys.append(proto.unb64(row[4]))
             except Exception:
-                logger.exception(f"Stored public key for {addr[0]} is invalid")
+                logger.exception(f"Stored public key for {origin} is invalid")
 
         # Establish every possible candidate wire key
-        candidates = self._establish_wire_key_candidates(sock, candidate_pubkeys)
+        candidates = self._establish_wire_key_candidates(sock, candidate_pubkeys, timeout=wire_timeout)
 
-        sock.settimeout(HANDSHAKE_TIMEOUT)
+        sock.settimeout(hello_timeout)
         try:
-            result = self._read_packet_multi_key(sock, candidates)
+            result = self._read_packet_multi_key(sock, candidates, timeout=hello_timeout)
         finally:
             sock.settimeout(None)
 
@@ -497,7 +632,8 @@ class NetworkManager:
                 f"key was authenticated by {authenticated_fp[:16]}..., refusing"
             )
 
-        if self.storage.get_contact(hello["fingerprint"]) is None:
+        contact_id = cv.make_contact_id(hello["fingerprint"], onion)    # the contact of THIS transport (the same key may be saved as IP and as onion contact)
+        if self.storage.get_contact(contact_id) is None:
             raise PeerMismatch(f"Peer is not in the contact list: {hello['fingerprint'][:16]}...")
 
         # Build and send HELLO_ACK
@@ -508,9 +644,9 @@ class NetworkManager:
         )
         sock.sendall(proto.frame(proto.add_padding(ack), wire_key))
 
-        return self._finalize_handshake(hello, nonce_mine, kx, is_initiator=False) + (wire_key,)
+        return self._finalize_handshake(hello, nonce_mine, kx, is_initiator=False, contact_id=contact_id) + (wire_key,)
 
-    def _finalize_handshake(self, their_packet, my_nonce, kx: KeyExchange, is_initiator: bool):
+    def _finalize_handshake(self, their_packet, my_nonce, kx: KeyExchange, is_initiator: bool, contact_id=None):
         """Finalize handshake: derive the root key and build the Double Ratchet"""
 
         their_pub_raw = proto.unb64(their_packet["identity_pub"])
@@ -523,7 +659,7 @@ class NetworkManager:
             )
 
         # Check contact exists
-        if self.storage.get_contact(their_fp) is None:
+        if self.storage.get_contact(contact_id or their_fp) is None:
             raise PeerMismatch("Fingerprint was not found in contacts")
 
         # Order nonces deterministically
@@ -604,6 +740,8 @@ class NetworkManager:
         workers = []
         for contact in self.storage.list_contacts():
             fp = contact[0]
+            if connect and cv.is_onion_contact_id(fp) and not self._onion_due(fp):
+                continue    # Tor is off, or this onion contact was tried too recently
             with self._presence_inflight_lock:
                 already_inflight = fp in self._presence_inflight
                 if already_inflight and connect:
@@ -653,7 +791,7 @@ class NetworkManager:
             self.on_statusbar_message(packet["sender"], f"Presence mismatch: expected {session.peer_fingerprint[:16]}")
             return
 
-        fp = session.peer_fingerprint
+        fp = session.contact_id
 
         # Save presence
         self.peer_presence[fp] = time.time()
@@ -682,8 +820,8 @@ class NetworkManager:
         Returns True if the NEW session was discarded (the caller must not start
         its read_loop, as the session has already been closed).
         """
-        # Calculate my preference
-        i_prefer_inbound = self.identity.fingerprint < fp
+        # Calculate my preference (from the real fingerprints: both ends must reach the same decision whatever the transport)
+        i_prefer_inbound = self.identity.fingerprint < cv.contact_fingerprint(fp)
         new_is_preferred = (is_inbound == i_prefer_inbound)
 
         with self.sessions_lock:
@@ -764,37 +902,39 @@ class NetworkManager:
 
     ## Read & inbound
 
-    def _handle_inbound(self, sock, addr):
+    def _handle_inbound(self, sock, addr, onion=False):
         """Handle inbound traffic and sessions"""
+        origin = "onion service" if onion else addr[0]
         try:    # try getting inbound handshake
-            their_fp, _their_name, ratchet, _their_listen_port, wire_key = self._do_handshake_inbound(sock, addr)
+            their_fp, _their_name, ratchet, _their_listen_port, wire_key = self._do_handshake_inbound(sock, addr, onion=onion)
         except (proto.InvalidPacket, OSError) as e:
-            self.on_statusbar_message("?", f"Failed handshake from {addr[0]}: {e}")
+            self.on_statusbar_message("?", f"Failed handshake from {origin}: {e}")
             sock.close()
             return
         except Exception as e:
-            logger.exception(f"Unexpected error during inbound handshake from {addr[0]}: {e}")
-            self.on_statusbar_message("?", f"Unexpected error handling {addr[0]}: {e}")
+            logger.exception(f"Unexpected error during inbound handshake from {origin}: {e}")
+            self.on_statusbar_message("?", f"Unexpected error handling {origin}: {e}")
             try:
                 sock.close()
             except OSError:
                 pass
             return
 
-        # Get contact from fingerprint
-        contact = self.storage.get_contact(their_fp)
+        # Get contact from fingerprint (and transport)
+        cid = cv.make_contact_id(their_fp, onion)
+        contact = self.storage.get_contact(cid)
         if contact is None:
-            self.on_statusbar_message(their_fp, "Tried handshake but not in contact list")
+            self.on_statusbar_message(cid, "Tried handshake but not in contact list")
 
         # Install session (new if neeeded)
-        session = Session(sock, their_fp, ratchet, wire_key)
-        discarded = self._install_session(their_fp, session, is_inbound=True)
+        session = Session(sock, their_fp, ratchet, wire_key, contact_id=cid)
+        discarded = self._install_session(cid, session, is_inbound=True)
         if discarded:   # old session is mantained
             return
         # Set as online, send pending messages and read
-        self.on_status(their_fp, "online")
-        self._flush_if_online(their_fp)
-        self._read_loop(session, addr[0])
+        self.on_status(cid, "online")
+        self._flush_if_online(cid)
+        self._read_loop(session, None if onion else addr[0])    # no meaningful peer address behind an onion connection
 
     def _handle_incoming_message(self, session: Session, packet: dict, peer_ip: str):
         """Handle incoming packets, specifically messages"""
@@ -822,30 +962,30 @@ class NetworkManager:
             try:    # candidate step(s), not yet committed
                 mk, commit = session.ratchet.prepare_receive(header)
             except ratchet_mod.RatchetError as e:
-                self.on_statusbar_message(session.peer_fingerprint, "chain desync beyond recovery, session closed")
-                logger.warning(f"Ratchet error from {session.peer_fingerprint[:16]}...: {e} (chain_index {packet['chain_index']}), killing session")
+                self.on_statusbar_message(session.contact_id, "chain desync beyond recovery, session closed")
+                logger.warning(f"Ratchet error from {session.contact_id[:16]}...: {e} (chain_index {packet['chain_index']}), killing session")
                 session.alive = False   # force a clean reconnect/re-handshake instead of stalling forever
                 return
 
             try:    # try decrypting
                 plaintext = crypto.decrypt_message(mk, proto.unb64(packet["nonce"]), proto.unb64(packet["ciphertext"]), aad)
             except Exception:   # unable, could be corrupted or modified: ratchet state is untouched
-                self.on_statusbar_message(session.peer_fingerprint, "cannot decipher message, dropped")
-                logger.exception(f"Cannot decipher message from {session.peer_fingerprint[:16]}..., dropped")
+                self.on_statusbar_message(session.contact_id, "cannot decipher message, dropped")
+                logger.exception(f"Cannot decipher message from {session.contact_id[:16]}..., dropped")
                 return
 
             try:
                 commit()    # decrypted successfully: NOW advance the ratchet for real
             except ratchet_mod.RatchetError as e:   # cannot happen while the session lock is held; fail closed anyway
-                logger.error(f"Ratchet commit refused for {session.peer_fingerprint[:16]}...: {e}, killing session")
+                logger.error(f"Ratchet commit refused for {session.contact_id[:16]}...: {e}, killing session")
                 session.alive = False
                 return
 
         session.seen_msg_ids.add(msg_id)    # only mark seen once actually decrypted, so a failed attempt can be retried
 
         # Store message and put in UI the recieval
-        self.storage.store_message(msg_id, session.peer_fingerprint, "in", packet["timestamp"], plaintext, peer_ip, unreceived=1)
-        self.on_message(session.peer_fingerprint, plaintext, packet["timestamp"])
+        self.storage.store_message(msg_id, session.contact_id, "in", packet["timestamp"], plaintext, peer_ip, unreceived=1)
+        self.on_message(session.contact_id, plaintext, packet["timestamp"])
 
         try:    # send message ACK
             session.send(proto.add_padding(proto.build_message_ack(msg_id, self.identity.fingerprint)))
@@ -868,7 +1008,7 @@ class NetworkManager:
 
             # Rate limit exceeded (bytes/timeframe)
             if not session.rate_limiter.allow(frame_len):
-                logger.warning(f"Rate limit exceeded by {session.peer_fingerprint[:16]}..., packet type {packet['type']} dropped")
+                logger.warning(f"Rate limit exceeded by {session.contact_id[:16]}..., packet type {packet['type']} dropped")
                 continue
 
             if packet["type"] == "MESSAGE": # message, handle with function
@@ -876,13 +1016,13 @@ class NetworkManager:
             elif packet["type"] == "MESSAGE_ACK":   # ack to message, pop from pending and delete from outbox
                 if packet["sender"] != session.peer_fingerprint:    # corrupted or MITM
                     continue
-                self.on_statusbar_message(session.peer_fingerprint, f"ack:{packet['id']}")
+                self.on_statusbar_message(session.contact_id, f"ack:{packet['id']}")
                 with self.pending_acks_lock:
                     entry = self.pending_acks.pop(packet["id"], None)
                 if entry is not None and entry["retries"] == 0:    # Karn: only sample RTT from sends that were never retransmitted (unambiguous timing)
                     session.update_rtt(time.time() - entry["sent_at"])
                 self.storage.delete_outbox(packet["id"])
-                self.on_ack(session.peer_fingerprint, packet["id"])
+                self.on_ack(session.contact_id, packet["id"])
             elif packet["type"] == "CLOSE": # close session
                 if packet["sender"] != session.peer_fingerprint:    # corrupted or MITM
                     continue
@@ -896,9 +1036,9 @@ class NetworkManager:
         session.alive = False
         session.destroy()
         with self.sessions_lock:
-            if self.sessions.get(session.peer_fingerprint) is session:
-                del self.sessions[session.peer_fingerprint]
-        self.on_status(session.peer_fingerprint, "offline")
+            if self.sessions.get(session.contact_id) is session:
+                del self.sessions[session.contact_id]
+        self.on_status(session.contact_id, "offline")
 
         try:
             session.sock.close()
@@ -931,7 +1071,7 @@ class NetworkManager:
     def _flush_outbox_for(self, contact_fingerprint: str):
         """Flush outbox with an acquired lock"""
         lock = self._get_flush_lock(contact_fingerprint)
-        acquired = lock.acquire(timeout=CONNECT_TIMEOUT + 10)
+        acquired = lock.acquire(timeout=(ONION_CONNECT_TIMEOUT if cv.is_onion_contact_id(contact_fingerprint) else CONNECT_TIMEOUT) + 10)
         if not acquired:
             self.on_statusbar_message(contact_fingerprint, "Failed to flush outbox, lock is too busy. The worker will retry later")
             return
@@ -1048,6 +1188,7 @@ class NetworkManager:
     def stop(self):
         """Stop all network activity"""
         self._stop.set()
+        self.stop_onion()
         if self._listener_sock: # close sock
             try:
                 self._listener_sock.close()

@@ -33,6 +33,7 @@ The application uses a terminal-based interface powered by Textual and a modular
 - **Encrypted storage:** SQLCipher-backed database with additional protection for sensitive fields.
 - **Network traffic padding:** Fixed-size packet framing to reduce information leaked through packet sizes.
 - **Contact management:** Add, list and revoke contacts.
+- **Optional Tor/onion network (off by default):** `.onion` contacts (marked `(On)`), your own onion address and guided Tor installation, without opening any port. See [Tor / onion network](#tor--onion-network).
 - **Secure memory (best effort):** Memory locking and buffer zeroization.
 - **Terminal interface:** Interactive TUI built with Textual.
 - **Optional update check:** Off by default; when enabled, compares the installed version with the latest GitHub release at launch.
@@ -48,7 +49,10 @@ Redoubt separates its functionality into independent modules:
 | `ratchet.py` | Double Ratchet: session key derivation and forward-secure message keys |
 | `identity.py` | Local identity and vault management |
 | `contact_validation.py` | Contact input validation shared by the CLI and the UI form |
-| `network.py` | Peer-to-peer networking |
+| `network.py` | Peer-to-peer networking (IPv4 and onion transports) |
+| `onion.py` | Onion v3 address validation, onion service keys, SOCKS5 client |
+| `onion_service.py` | Orchestrates what the *Use Tor/Onion network* switch turns on and off |
+| `tor_manager.py` | Finds/installs Tor, runs Redoubt's private Tor instance and controls it |
 | `migration.py` | Database and identity format migration handler (from v2.1.1 to v2.2.0) |
 | `protocol.py` | Communication protocol and packet handling |
 | `storage.py` | Encrypted persistent storage |
@@ -87,6 +91,7 @@ Redoubt does not currently provide all the security properties of mature messagi
 - **Network metadata:** IP addresses, communication timing, packet counts and communication patterns remain observable.
 - **Trust establishment:** Initial contact verification requires an out-of-band fingerprint exchange. Cryptography cannot independently establish that a public key belongs to the intended person.
 - **Update check (opt-in):** If enabled in Settings, every launch sends an HTTPS request to `api.github.com`: GitHub (and anyone observing your network) learns your IP address and when you start Redoubt. It is off by default and is the only connection to a host that is not a contact.
+- **Tor/onion (opt-in):** Only onion contacts use Tor. IP contacts still connect directly and see your IP address, even with Tor on. Tor hides *where* you are, not *that* you use Tor, nor traffic timing. Anyone who knows your `.onion` address can open connections to it (they cannot authenticate without a contact key, but they can cost you CPU: inbound onion connections share one rate-limit bucket). The onion service key lives in the encrypted database, but the Tor process itself is only as trustworthy as the `tor` package installed on your system.
 - **No protection against a compromised endpoint:** An attacker controlling the operating system or running process is outside the protection provided by the application.
 
 These limitations are deliberate and documented rather than hidden behind broad security claims.
@@ -287,10 +292,25 @@ The resulting AppImage is placed in the repository root.
 ### Menu (top left)
 
 - **About**: shows author, version and license.
-- **Show card**: shows your PubKey and Fingerprint (SHA-256 of PubKey, as a double check).
-- **Contact list**: shows, for every saved contact, name, IP, PubKey and Fingerprint, with the option to revoke them, deleting every message (the contact must be added again to chat).
-- **Add contact**: insert name, IP, PubKey and Fingerprint to add a contact to the database.
-- **Settings**: *Check version at launch* (off by default). If on, at launch Redoubt compares its version with the latest GitHub release and shows a popup if a newer release exists, or if the installed version is newer than the latest release (withdrawn release, regression or development build).
+- **Show card**: shows your PubKey and Fingerprint (SHA-256 of PubKey, as a double check) and, once created, your onion address.
+- **Contact list**: shows, for every saved contact, name, IP (or onion address), PubKey and Fingerprint, with the option to revoke them, deleting every message (the contact must be added again to chat).
+- **Add contact**: insert name, IP *or v3 `.onion` address*, PubKey and Fingerprint to add a contact to the database.
+- **Settings**: *Use Tor/Onion network* (off by default, see below) and *Check version at launch* (off by default). If on, at launch Redoubt compares its version with the latest GitHub release and shows a popup if a newer release exists, or if the installed version is newer than the latest release (withdrawn release, regression or development build).
+
+### Tor / onion network
+
+Off by default. While the switch is off Redoubt does not need Tor, does not install it and never starts it.
+
+Turning **Settings > Use Tor/Onion network** on:
+
+1. Looks for a `tor` executable. If there is none, a setup screen shows the right install command for your system (apt, dnf, pacman, zypper, apk, xbps; manual steps on Windows) and can run it for you in the terminal: you see the output and type the `sudo` password yourself.
+2. Creates your onion service key (kept encrypted in the vault database, never written to disk by Tor) and checks the address derived from it.
+3. Starts a **private Tor instance** (own data directory in `~/.redoubt/tor`, random ports, client only, never the system Tor service), publishes your onion service and checks that Tor created exactly the expected address.
+4. Opens a loopback-only listener behind the onion service and lets you dial onion contacts through Tor.
+
+Your own address is shown in *Settings* and in *Show card*; *New onion address* replaces it (contacts must be given the new one). Contacts and messages are never touched by switching Tor on or off: with it off, onion contacts stay in the list but are unreachable.
+
+Onion contacts are shown with an `(On)` prefix. The same person (same key/fingerprint) can be saved twice, once with an IP and once with an onion address: they are two contacts with separate chats and sessions. Both sides must add each other with the *same kind* of address (an onion contact on your side needs an onion contact for you on theirs). Names starting with `(On)` are refused so the prefix cannot be faked.
 
 ### Contact management from the CLI (Linux legacy)
 
@@ -310,10 +330,10 @@ The same contact operations are still available from the command line:
 
 ## Roadmap
 
-### V2.3.0: Tor/onion net
+### V2.3.0: Tor/onion net (implemented, unreleased)
 
-- Optional Tor/onion networking.
-- Separation of LAN and onion contacts.
+- Optional Tor/onion networking (off by default).
+- Separation of IP and onion contacts, with guided setup of your own `.onion` address and Tor installation.
 
 ### V3.0.0: System-level improvements
 

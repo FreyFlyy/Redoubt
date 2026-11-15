@@ -10,9 +10,12 @@ import json
 from datetime import datetime
 from . import __version__
 from . import contact_validation
+from . import onion as onion_mod
+from . import onion_service as onion_service_mod
+from . import tor_manager
 from . import update_check
 from . import protocol as proto
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Input, Label, ListItem, ListView, OptionList, RichLog, Static, Switch
 from textual.widgets.option_list import Option
@@ -30,6 +33,7 @@ logger = logger_mod.get_logger(__name__)
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".redoubt", "settings.json")
 SETTING_CHECK_VERSION = "check_version_at_launch"   # settings.json key (bool, off by default)
+SETTING_USE_TOR = "use_tor_onion"   # settings.json key (bool, off by default): Tor is neither required nor started while off
 
 BYTE_COUNTER_WARNING_THRESHOLD = 2300   # threshold for "approaching max bytes"
 
@@ -155,7 +159,7 @@ class ContactItem(ListItem):
 ## Model CSS block for popups
 
 MODAL_CSS = """
-ConfirmClearScreen, ConfirmQuitScreen, ConfirmRevokeScreen, AboutScreen, VersionNoticeScreen {
+ConfirmClearScreen, ConfirmQuitScreen, ConfirmRevokeScreen, ConfirmScreen, AboutScreen, VersionNoticeScreen {
     align: center middle;
     background: $background 60%;
 }
@@ -248,6 +252,33 @@ class ConfirmQuitScreen(ModalScreen):
 
 
 
+## Generic confirm class
+
+class ConfirmScreen(ModalScreen):
+    """Yes/No popup with a custom text (markup). Dismisses with True only on Yes"""
+    CSS = MODAL_CSS
+
+    BINDINGS = [Binding("escape", "no", show=False)]
+
+    def __init__(self, text: str):
+        super().__init__()
+        self._text = text
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self._text)
+            with Horizontal(id="buttons_row"):
+                yield Button("Yes", id="yes", classes="neutral")
+                yield Button("No", id="no", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(event.button.id == "yes")
+
+    def action_no(self) -> None:
+        self.dismiss(False)
+
+
 ## Menu dropdown class
 
 class MenuScreen(ModalScreen):
@@ -322,7 +353,7 @@ class AboutScreen(ModalScreen):
 ## Settings class
 
 class SettingsScreen(ModalScreen):
-    """Settings popup (only "check version at launch" for now). Every change is saved immediately"""
+    """Settings popup. Every change is saved immediately"""
 
     CSS = """
     SettingsScreen {
@@ -331,8 +362,9 @@ class SettingsScreen(ModalScreen):
     }
 
     #settings_dialog {
-        width: 60;
+        width: 72;
         height: auto;
+        max-height: 95vh;
         background: $panel;
         padding: 1 2;
     }
@@ -343,19 +375,23 @@ class SettingsScreen(ModalScreen):
         margin-bottom: 1;
     }
 
-    #setting_row {
+    .setting_row {
         height: auto;
     }
 
-    #setting_row Label {
+    .setting_row Label {
         width: 1fr;
         height: 3;
         content-align: left middle;
     }
 
-    #settings_hint {
-        margin-top: 1;
+    .settings_hint {
+        margin-bottom: 1;
         color: $text-muted;
+    }
+
+    #tor_status, #onion_address {
+        height: auto;
     }
 
     #settings_buttons {
@@ -363,23 +399,78 @@ class SettingsScreen(ModalScreen):
         align: center middle;
         margin-top: 1;
     }
+
+    #settings_buttons Button {
+        margin: 0 1;
+    }
     """
 
     BINDINGS = [Binding("escape", "close", show=False)]
 
     def compose(self) -> ComposeResult:
         """Compose the popup"""
+        settings = load_settings()
         with Vertical(id="settings_dialog"):
             yield Label("[b]Settings[/]", id="settings_title")
-            with Horizontal(id="setting_row"):
+            with Horizontal(classes="setting_row"):
                 yield Label("Check version at launch")
-                yield Switch(value=load_settings().get(SETTING_CHECK_VERSION) is True, id="check_version_switch")
+                yield Switch(value=settings.get(SETTING_CHECK_VERSION) is True, id="check_version_switch")
             yield Static(
                 "Contacts api.github.com at every launch: GitHub sees your IP address. Off by default.",
-                id="settings_hint",
+                classes="settings_hint",
             )
+            with Horizontal(classes="setting_row"):
+                yield Label("Use Tor/Onion network")
+                yield Switch(value=settings.get(SETTING_USE_TOR) is True, id="use_tor_switch")
+            yield Static(
+                "Lets you add .onion contacts and be reached at your own .onion address without opening any port. "
+                "IP contacts are NOT sent through Tor. Off by default: while off, Tor is not needed, not installed and not started.",
+                classes="settings_hint",
+            )
+            yield Static("", id="tor_status")
+            yield Static("", id="onion_address")
             with Horizontal(id="settings_buttons"):
+                yield Button("New onion address", id="new_onion", disabled=True)
                 yield Button("Close", id="close", variant="primary")
+
+    def on_mount(self) -> None:
+        self._refresh()
+        self.set_interval(0.5, self._refresh)   # Tor start/bootstrap runs in a worker thread: poll its state
+
+    def _onion(self):
+        return getattr(self.app, "onion", None)
+
+    def _refresh(self) -> None:
+        """Show the live onion state (status, own address) and keep the switch in sync with the saved setting"""
+        onion = self._onion()
+        status = self.query_one("#tor_status", Static)
+        address = self.query_one("#onion_address", Static)
+        new_btn = self.query_one("#new_onion", Button)
+        switch = self.query_one("#use_tor_switch", Switch)
+
+        wanted = load_settings().get(SETTING_USE_TOR) is True
+        if switch.value != wanted:  # e.g. the user cancelled the Tor install helper: the app turned the setting off
+            with self.prevent(Switch.Changed):
+                switch.value = wanted
+
+        if onion is None:
+            status.update("[dim]Tor status: unavailable[/]")
+            address.update("")
+            new_btn.disabled = True
+            return
+
+        text = onion.status_text
+        if onion.state == onion_service_mod.ERROR:
+            text = f"[b]{escape(text)}[/]\nToggle the switch off and on to retry."
+        elif onion.state == onion_service_mod.READY:
+            text = f"[b]{escape(text)}[/]"
+        else:
+            text = escape(text)
+        status.update(f"Tor status: {text}")
+
+        own = onion.address
+        address.update(f"Your onion address:\n[b]{own}[/]" if own else "[dim]Your onion address will be created when you first turn Tor on.[/]")
+        new_btn.disabled = own is None or onion.state in (onion_service_mod.READY, *onion_service_mod.BUSY_STATES)
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         """Save the new value right away (merging, so other settings are kept)"""
@@ -388,13 +479,134 @@ class SettingsScreen(ModalScreen):
             data = load_settings()
             data[SETTING_CHECK_VERSION] = event.value
             save_settings(data)
+        elif event.switch.id == "use_tor_switch":
+            self.app.set_use_tor(event.value)
+            self._refresh()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
+        if event.button.id == "new_onion":
+            def after_confirm(confirmed):
+                if not confirmed:
+                    return
+                try:
+                    self._onion().regenerate_key()
+                except Exception as e:
+                    logger.exception("Cannot regenerate the onion address")
+                    self.app.query_one("#statusbar", Static).update(f"Cannot create a new onion address: {escape(str(e))}")
+                self._refresh()
+
+            self.app.push_screen(ConfirmScreen(
+                "[b]New onion address[/]\n\nThe current address will stop working: every contact who saved it "
+                "will have to be given the new one. Continue?"
+            ), after_confirm)
+            return
         self.dismiss()
 
     def action_close(self) -> None:
         self.dismiss()
+
+
+## Tor setup helper class
+
+class TorSetupScreen(ModalScreen):
+    """Shown when "Use Tor/Onion network" is on but no tor executable exists. Offers to install it. Dismisses with True if Tor is
+    now available, False if the user gave up (the switch is then turned back off)"""
+
+    CSS = """
+    TorSetupScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+
+    #tor_dialog {
+        width: 80;
+        height: auto;
+        max-height: 95vh;
+        background: $panel;
+        padding: 1 2;
+    }
+
+    #tor_dialog Static {
+        margin-bottom: 1;
+    }
+
+    #tor_command {
+        background: $surface;
+        padding: 0 1;
+    }
+
+    #tor_result {
+        color: $warning;
+    }
+
+    #tor_buttons {
+        height: auto;
+        align: center middle;
+    }
+
+    #tor_buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, tor_dir: str = tor_manager.TOR_DIR):
+        super().__init__()
+        self._tor_dir = tor_dir
+        self._plan = tor_manager.get_install_plan(tor_dir)
+
+    def compose(self) -> ComposeResult:
+        plan = self._plan
+        with Vertical(id="tor_dialog"):
+            yield Static("[b]Tor is required[/]\n\nRedoubt needs the \"tor\" program to reach onion contacts and to publish your onion address. "
+                         "It was not found on this system.")
+            yield Static(escape(plan.description))
+            yield Static(escape(plan.display), id="tor_command")
+            if plan.note:
+                yield Static(f"[dim]{escape(plan.note)}[/]")
+            yield Static("", id="tor_result")
+            with Horizontal(id="tor_buttons"):
+                if plan.can_run:
+                    yield Button("Install now", id="install", variant="primary")
+                yield Button("Check again", id="check", variant="primary" if not plan.can_run else "default")
+                yield Button("Cancel", id="cancel")
+
+    def _found(self) -> bool:
+        return tor_manager.find_tor_binary(self._tor_dir) is not None
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        result = self.query_one("#tor_result", Static)
+        if event.button.id == "cancel":
+            self.dismiss(False)
+        elif event.button.id == "check":
+            if self._found():
+                self.dismiss(True)
+            else:
+                result.update("Tor was still not found.")
+        elif event.button.id == "install":
+            try:
+                with self.app.suspend():    # leave the TUI: the package manager (and sudo's password prompt) run in the user's terminal
+                    print("\n=== Installing Tor (commands below, output follows) ===")
+                    print("   " + self._plan.display + "\n")
+                    ok = tor_manager.run_install_plan(self._plan)
+                    print("\nDone." if ok else "\nThe installation did not complete.")
+                    try:
+                        input("Press Enter to return to Redoubt...")
+                    except EOFError:
+                        pass
+            except SuspendNotSupported:
+                result.update("This terminal cannot be suspended: run the command above yourself, then press \"Check again\".")
+                return
+            if self._found():
+                self.dismiss(True)
+            else:
+                result.update("Tor still not found after the installation. Fix the error shown in the terminal or install it manually, then press \"Check again\".")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 ## Version notice class
@@ -472,9 +684,10 @@ class ShowCardScreen(ModalScreen):
 
     BINDINGS = [Binding("escape", "close", show=False)]
 
-    def __init__(self, identity):
+    def __init__(self, identity, onion_address=None):
         super().__init__()
         self._identity = identity
+        self._onion_address = onion_address
 
     def compose(self) -> ComposeResult:
         """Compose the popup: own PubKey and fingerprint, to share out-of-band or on a secure channel"""
@@ -482,6 +695,8 @@ class ShowCardScreen(ModalScreen):
             yield Label("[b]Identity card[/]", id="card_title")
             yield Label(f"[b]Fingerprint[/] : {contact_validation.format_fingerprint(self._identity.fingerprint)}", id="card_fingerprint")
             yield Label(f"[b]Public key[/]  : {proto.b64(self._identity.public_key_raw)}", id="card_public_key")
+            if self._onion_address:
+                yield Label(f"[b]Onion address[/] : {self._onion_address}", id="card_onion")
             yield Label("Verify the fingerprint with the contact BEFORE messaging.", classes="hint")
             with Horizontal(id="card_buttons"):
                 yield Button("Close", id="close", variant="primary")
@@ -596,16 +811,18 @@ class ContactListScreen(ModalScreen):
             with VerticalScroll(id="cl_scroll"):
                 if not self._contacts:
                     yield Label("No saved contacts.", id="cl_empty")
-                for fp, name, ip, _port, pubkey_b64 in self._contacts:
+                for cid, name, ip, _port, pubkey_b64 in self._contacts:
+                    shown = contact_validation.display_name(cid, name)  # onion contacts: "(On) name"
+                    label = "Onion" if contact_validation.is_onion_contact_id(cid) else "IP"
                     with Horizontal(classes="contact_row"):
                         yield Static(
-                            f"[b]{escape(name)}[/]\n"
-                            f"IP: {escape(str(ip))}\n"
+                            f"[b]{escape(shown)}[/]\n"
+                            f"{label}: {escape(str(ip))}\n"
                             f"PubKey: {escape(pubkey_b64)}\n"
-                            f"FP: {contact_validation.format_fingerprint(fp)}",
+                            f"FP: {contact_validation.format_fingerprint(contact_validation.contact_fingerprint(cid))}",
                             classes="contact_info",
                         )
-                        yield RevokeButton(fp, name)
+                        yield RevokeButton(cid, shown)
             with Horizontal(id="cl_buttons"):
                 yield Button("Close", id="cl_close", variant="primary")
 
@@ -636,7 +853,8 @@ class ContactListScreen(ModalScreen):
 ## Add contact class
 
 class AddContactScreen(ModalScreen):
-    """Form with 4 fields (Name, IP, PubKey, Fingerprint). Dismisses with the new contact name, or None"""
+    """Form with 4 fields (Name, IP or .onion address, PubKey, Fingerprint). Dismisses with the new contact name as shown in the
+    sidebar ("(On) name" for onion contacts), or None"""
     CSS = """
     AddContactScreen {
         align: center middle;
@@ -693,8 +911,8 @@ class AddContactScreen(ModalScreen):
             yield Label("[b]Add contact[/]", id="form_title")
             yield Label("Name (only visible by you)", classes="field")
             yield Input(placeholder="Name", id="add_name")
-            yield Label("IP", classes="field")
-            yield Input(placeholder="IP", id="add_ip")
+            yield Label("IP or .onion address", classes="field")
+            yield Input(placeholder="IPv4 address or v3 .onion address", id="add_ip")
             yield Label("Public key (base64)", classes="field")
             yield Input(placeholder="Public key", id="add_pubkey")
             yield Label("Fingerprint (with or without spaces)", classes="field")
@@ -739,14 +957,15 @@ class AddContactScreen(ModalScreen):
             error.update(str(e))
             return
 
+        cid = contact_validation.contact_id_for(fingerprint, ip)
         try:
-            self._storage.add_contact(fingerprint, name, ip, DEFAULT_PORT, pubkey_b64)
+            self._storage.add_contact(cid, name, ip, DEFAULT_PORT, pubkey_b64)
         except Exception:
             logger.exception("Cannot store new contact")
             error.update("Cannot save the contact (see log).")
             return
 
-        self.dismiss(name)
+        self.dismiss(contact_validation.display_name(cid, name))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -866,11 +1085,12 @@ class RedoubtApp(App):
         Binding("f2", "open_menu", "Menu", show=True),
     ]
 
-    def __init__(self, identity, storage, network):
+    def __init__(self, identity, storage, network, onion=None):
         super().__init__()
         self.identity = identity
         self.storage = storage
         self.network = network
+        self.onion = onion      # OnionService, or None (CLI / tests)
         self.current_contact = None
         self._items = {}
         network.on_message = self.on_message
@@ -921,6 +1141,9 @@ class RedoubtApp(App):
         if load_settings().get(SETTING_CHECK_VERSION) is True:  # opt-in only (off by default)
             self.run_worker(self._check_version_worker, thread=True, exit_on_error=False)
 
+        if load_settings().get(SETTING_USE_TOR) is True:    # opt-in only (off by default): nothing Tor-related runs otherwise
+            self.start_onion()
+
 
     ## Command actions
 
@@ -968,7 +1191,7 @@ class RedoubtApp(App):
         if choice == "about":
             self.push_screen(AboutScreen())
         elif choice == "show_card":
-            self.push_screen(ShowCardScreen(self.identity))
+            self.push_screen(ShowCardScreen(self.identity, self.onion.address if self.onion is not None else None))
         elif choice == "contacts":
             self.push_screen(ContactListScreen(self.storage.list_contacts()))
         elif choice == "add":
@@ -977,16 +1200,19 @@ class RedoubtApp(App):
             self.push_screen(SettingsScreen())
 
     def contact_added(self, name):
-        """Add-contact form closed: if a contact was added, refresh the sidebar"""
+        """Add-contact form closed: if a contact was added (name as shown in the sidebar), refresh it"""
         if not name:
             return
         self.reload_contacts()
-        self.query_one("#statusbar", Static).update(f"Contact {escape(name)} added")
+        note = ""
+        if name.startswith(contact_validation.ONION_NAME_PREFIX) and not (self.onion is not None and self.onion.state == onion_service_mod.READY):
+            note = " [dim](Tor is off: turn on \"Use Tor/Onion network\" in Settings to reach it)[/]"
+        self.query_one("#statusbar", Static).update(f"Contact {escape(name)} added{note}")
 
     def revoke_contact(self, fingerprint):
         """Revoke a contact: delete it (with messages/outbox), then kill its live session and in-RAM ratchet state"""
         contact = self.storage.get_contact(fingerprint)
-        name = contact[1] if contact else fingerprint[:16]
+        name = contact_validation.display_name(fingerprint, contact[1]) if contact else fingerprint[:16]
 
         # 1. database first: from now on no handshake can succeed for this contact
         self.storage.delete_contact(fingerprint)
@@ -1010,6 +1236,74 @@ class RedoubtApp(App):
             self.query_one("#chatlog", RichLog).clear()
         self.reload_contacts()
         self.query_one("#statusbar", Static).update(f"Contact {escape(name)} revoked")
+
+
+    ## Tor / onion
+
+    def set_use_tor(self, enabled: bool):
+        """The "Use Tor/Onion network" switch: save it, then turn the onion side on/off in a worker thread"""
+        settings = load_settings()
+        settings[SETTING_USE_TOR] = enabled
+        save_settings(settings)
+        if self.onion is None:
+            return
+        if enabled:
+            self.start_onion()
+        else:
+            self.run_worker(self._disable_onion_worker, thread=True, exit_on_error=False)
+
+    def start_onion(self):
+        """Turn the onion side on (Tor start + bootstrap take a while: worker thread). No-op if already running or no service"""
+        if self.onion is None or self.onion.busy or self.onion.state == onion_service_mod.READY:
+            return
+        self.run_worker(self._enable_onion_worker, thread=True, exit_on_error=False)
+
+    def _enable_onion_worker(self):
+        try:
+            self.onion.enable()
+        except Exception:   # an exception escaping a worker would close the app
+            logger.exception("Onion enable failed")
+        try:
+            self.call_from_thread(self._onion_enable_done)
+        except RuntimeError:
+            logger.debug("App closed before the onion setup finished")
+
+    def _onion_enable_done(self):
+        """UI thread: report the outcome (and offer the Tor install helper if tor is missing)"""
+        if not self.is_running:
+            return
+        statusbar = self.query_one("#statusbar", Static)
+        if self.onion.state == onion_service_mod.READY:
+            statusbar.update(f"[dim]Tor/Onion network on: {self.onion.address}[/]")
+        elif self.onion.state == onion_service_mod.NEED_INSTALL:
+            if not any(isinstance(scr, TorSetupScreen) for scr in self.screen_stack):
+                self.push_screen(TorSetupScreen(), self.tor_setup_done)
+        elif self.onion.state == onion_service_mod.ERROR:
+            statusbar.update(f"[dim]Tor/Onion network failed: {escape(self.onion.message)}[/]")
+
+    def tor_setup_done(self, installed):
+        """Install helper closed: retry if Tor is now there, otherwise turn the switch back off"""
+        if installed:
+            self.start_onion()
+            return
+        settings = load_settings()
+        settings[SETTING_USE_TOR] = False
+        save_settings(settings)
+        self.run_worker(self._disable_onion_worker, thread=True, exit_on_error=False)
+
+    def _disable_onion_worker(self):
+        try:
+            self.onion.disable()
+        except Exception:
+            logger.exception("Onion disable failed")
+        try:
+            self.call_from_thread(self._onion_disable_done)
+        except RuntimeError:
+            logger.debug("App closed before the onion shutdown finished")
+
+    def _onion_disable_done(self):
+        if self.is_running:
+            self.query_one("#statusbar", Static).update("[dim]Tor/Onion network off[/]")
 
 
     ## Version check
@@ -1095,6 +1389,7 @@ class RedoubtApp(App):
 
         for row in self.storage.list_contacts():    # for every contact, reload last message, label, preview and ContactItem
             fp, name = row[0:2]
+            name = contact_validation.display_name(fp, name)    # onion contacts: "(On) name"
             last = self.storage.get_last_message(fp)
             preview = ""
             preview_time = ""
@@ -1366,4 +1661,5 @@ class RedoubtApp(App):
 
         ts = datetime.now().strftime("%H:%M:%S")
 
-        self.query_one("#statusbar", Static).update(f"[{ts}] {fingerprint[:16]}... [dim]{escape(message)}[/]")
+        tag = contact_validation.ONION_NAME_PREFIX if contact_validation.is_onion_contact_id(fingerprint) else ""
+        self.query_one("#statusbar", Static).update(f"[{ts}] {tag}{fingerprint[:16]}... [dim]{escape(message)}[/]")

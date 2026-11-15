@@ -10,6 +10,8 @@ import json
 import threading
 from sqlcipher3 import dbapi2 as sqlcipher
 from . import crypto
+from . import contact_validation
+from . import onion as onion_mod
 from . import migration
 from . import logger as logger_mod
 logger = logger_mod.get_logger(__name__)
@@ -22,8 +24,8 @@ DB_FILE = os.path.join(DB_DIR, "redoubt.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS contacts (
-    fingerprint TEXT PRIMARY KEY,      -- hash of PubKey (doesn't reveal identity but can identify it)
-    ip TEXT,                           -- plaintext, for identification
+    fingerprint TEXT PRIMARY KEY,      -- contact id: hash of PubKey for IPv4 contacts, hash + "-onion" for onion contacts (so the same key can be saved once per transport)
+    ip TEXT,                           -- plaintext, for identification: IPv4 address or xxxx.onion address
     encrypted_blob BLOB NOT NULL       -- encrypted {name, ip, port, public_key_b64}
 );
 
@@ -34,6 +36,11 @@ CREATE TABLE IF NOT EXISTS messages (
     timestamp INTEGER NOT NULL,        -- plain, needed for ORDER BY
     encrypted_blob BLOB NOT NULL,      -- encrypted {text, peer_ip}
     unreceived INTEGER NOT NULL DEFAULT 0  -- plain, to know what messages to retransmit
+);
+
+CREATE TABLE IF NOT EXISTS secrets (
+    name TEXT PRIMARY KEY,             -- plain, e.g. "onion_service_seed"
+    encrypted_blob BLOB NOT NULL       -- encrypted (the name is authenticated inside the blob)
 );
 
 CREATE TABLE IF NOT EXISTS outbox (
@@ -147,7 +154,10 @@ class Storage:
     ## Contacts
 
     def add_contact(self, fingerprint, name, ip, port, public_key_b64):
-        """Add contact passing Name, IP, port (default), PubKey b64 and Fingerprint"""
+        """Add contact passing Name, IP (or .onion address), port (default), PubKey b64 and contact id
+        (the Fingerprint for IPv4 contacts, contact_validation.make_contact_id(fp, onion=True) for onion contacts)"""
+        if contact_validation.is_onion_contact_id(fingerprint) != onion_mod.is_onion_address(ip):
+            raise ValueError("Contact id and address disagree about the transport (onion vs IPv4)")
         blob = self._encrypt_contact(name, ip, port, public_key_b64)
         with self._lock:
             self.conn.execute(
@@ -203,13 +213,50 @@ class Storage:
         """List all contacts"""
         cur = self.conn.execute("SELECT fingerprint, encrypted_blob FROM contacts")
         rows = [self._decrypt_contact(fp, blob) for fp, blob in cur.fetchall()]
-        rows.sort(key=lambda row: row[1].lower())
+        rows.sort(key=lambda row: (row[1].lower(), contact_validation.is_onion_contact_id(row[0])))   # same name: IPv4 contact first
         return rows
 
     def get_contact_by_ip(self, ip):
         """Get all contact rows matching an IP (can be >1 in LANs and special NATs)"""
         cur = self.conn.execute("SELECT fingerprint, encrypted_blob FROM contacts WHERE ip = ?", (ip,))
         return [self._decrypt_contact(fp, blob) for fp, blob in cur.fetchall()]
+
+    def get_onion_contacts(self):
+        """Get every onion contact (an inbound onion connection carries no source address: the sender is found among all of them)"""
+        cur = self.conn.execute("SELECT fingerprint, encrypted_blob FROM contacts WHERE fingerprint LIKE ?",
+                                ("%" + contact_validation.ONION_CID_SUFFIX,))
+        return [self._decrypt_contact(fp, blob) for fp, blob in cur.fetchall()]
+
+
+    ## Secrets (additional encryption on top of SQLCipher, same as the sensitive fields above)
+
+    def set_secret(self, name: str, value: bytes):
+        """Store a named secret (e.g. the onion service seed)"""
+        blob = crypto.vault_encrypt(self.db_key, name.encode("utf-8") + b"\x00" + value)
+        with self._lock:
+            self.conn.execute("INSERT OR REPLACE INTO secrets (name, encrypted_blob) VALUES (?, ?)", (name, blob))
+            self.conn.commit()
+
+    def get_secret(self, name: str):
+        """The stored secret, or None if there is none (or it cannot be authenticated)"""
+        row = self.conn.execute("SELECT encrypted_blob FROM secrets WHERE name = ?", (name,)).fetchone()
+        if row is None:
+            return None
+        try:
+            plain = crypto.vault_decrypt(self.db_key, row[0])
+        except Exception:
+            logger.exception(f"Secret '{name}' cannot be decrypted (wrong vault key or corrupted database)")
+            return None
+        head, sep, value = plain.partition(b"\x00")
+        if not sep or head != name.encode("utf-8"):
+            logger.error(f"Secret '{name}' does not authenticate its own name")
+            return None
+        return value
+
+    def delete_secret(self, name: str):
+        with self._lock:
+            self.conn.execute("DELETE FROM secrets WHERE name = ?", (name,))
+            self.conn.commit()
 
 
     ## Messages

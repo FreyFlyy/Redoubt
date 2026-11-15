@@ -252,8 +252,8 @@ class StubApp:
     """Replaces the Textual UI. `hook(app)` runs inside run() like the user session would"""
     hook = None
 
-    def __init__(self, ident, storage, network):
-        self.ident, self.storage, self.network = ident, storage, network
+    def __init__(self, ident, storage, network, onion=None):
+        self.ident, self.storage, self.network, self.onion = ident, storage, network, onion
 
     def run(self):
         if StubApp.hook:

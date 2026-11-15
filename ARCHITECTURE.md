@@ -225,6 +225,22 @@ Sliding window, three distinct uses:
 
 ---
 
+## Onion network (optional)
+
+Everything here is inert unless *Use Tor/Onion network* is on (`settings.json`, off by default).
+
+**Contact ids.** A contact is identified by a contact id: the fingerprint for IPv4 contacts (so contacts saved before this feature are unchanged) and `<fingerprint>-onion` for onion contacts. Messages, outbox, sessions, ratchets and presence are all keyed by contact id, so the same key can be saved once per transport with fully independent state. `Session.peer_fingerprint` is always the real fingerprint (authentication, sender checks, session tie-break); `Session.contact_id` is the storage/UI key.
+
+**Outbound.** Onion contacts are dialed through the SOCKS5 port of Redoubt's private Tor with the hostname sent as a domain name (Tor resolves it; the machine never does). Timeouts are longer (60 s connect, 30 s handshake). A SOCKS reply meaning "service offline" is silent; other errors reach the status bar. Presence retries to an onion contact without a live session are limited to one per 60 s.
+
+**Inbound.** The onion service forwards to a **loopback-only** listener on a random port. Tor connects from 127.0.0.1, so there is no source address to narrow candidates: the handshake tries every onion contact's key (the same trial decryption already used for IP contacts), and the winning candidate must match the fingerprint claimed in HELLO. A peer saved only as an IP contact is refused on this listener. All inbound onion connections share one flood-guard bucket (20 per 10 s) and the global session cap.
+
+**Onion service key.** 32-byte Ed25519 seed in the `secrets` table (SQLCipher plus field-level encryption, name authenticated inside the blob). It is handed to Tor at runtime with `ADD_ONION ED25519-V3` over the control port, so Tor never persists it. Redoubt checks that the ServiceID returned by Tor equals the address it derived itself, and refuses to continue otherwise.
+
+**Tor process.** `tor_manager.py` writes a torrc (`ClientOnly`, `NoExec`, `SocksPort auto`, `ControlPort auto`, cookie auth), authenticates with SAFECOOKIE (so a rogue listener on the control port cannot impersonate Tor or learn the cookie), and sets `__OwningControllerProcess` so Tor exits when Redoubt does, even after a crash. When running from a PyInstaller/AppImage build the bundled `LD_LIBRARY_PATH` is not passed to the system `tor`.
+
+**Not covered.** Onion client authorization and proof-of-work DoS defenses are not used; an attacker who knows your address can open connections to it. Descriptor publication is reported from Tor's `HS_DESC UPLOADED` event.
+
 ## Update check (optional)
 
 `update_check.py`: stdlib-only module (`urllib`), no dependency on the rest of the package. Runs only if `check_version_at_launch` is `true` in `~/.redoubt/settings.json` (toggle: `Menu` → `Settings`); missing, `false` or non-boolean values mean off.
