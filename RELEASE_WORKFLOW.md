@@ -385,7 +385,51 @@ The release must:
 
 ---
 
-## 8. Release Notes
+## 8. GitHub Release Publication
+
+GitHub Releases are the official distribution mechanism for Redoubt binaries and release documentation.
+
+A GitHub Release must only be created after the corresponding release tag and all required validation procedures have been completed.
+
+### 8.1. Release creation
+
+Create the GitHub Release using the GitHub CLI (`gh`).
+
+Stable release example:
+
+```bash
+gh release create v2.2.2 \
+  Redoubt-2.2.2-x86_64.AppImage \
+  Redoubt-2.2.2-windows-x86_64.zip \
+  --title "Redoubt 2.2.2" \
+  --notes-file RELEASE_NOTES.md
+```
+
+Release candidate example:
+
+```bash
+gh release create v2.2.2-rc.1 \
+  Redoubt-2.2.2-rc.1-x86_64.AppImage \
+  Redoubt-2.2.2-rc.1-windows-x86_64.zip \
+  --title "Redoubt 2.2.2-rc.1" \
+  --notes-file RELEASE_NOTES.md \
+  --prerelease
+```
+
+### 8.2. Publication requirements
+
+Every GitHub Release must:
+
+- Reference the corresponding existing Git tag.
+- Use the correct version in its title.
+- Include the Linux AppImage.
+- Include the Windows ZIP distribution.
+- Include accurate release notes.
+- Include SHA-256 checksums for all distributable artifacts.
+
+Release candidates must be explicitly marked as pre-releases using
+
+## 8.3. Release Notes
 
 Every release must include accurate and concise release notes.
 
