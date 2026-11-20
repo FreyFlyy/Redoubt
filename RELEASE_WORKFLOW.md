@@ -571,13 +571,13 @@ A release candidate is considered validated only when every mandatory requiremen
 
 A stable release may be published only when every mandatory requirement below is satisfied:
 
-- [x] Final `vX.Y.Z-rc.N` candidate has passed all mandatory validation.
-- [x] All project version references have been changed from `X.Y.Z-rc.N` to `X.Y.Z`.
-- [x] The stable-version preparation commit contains no application functionality, dependency, or build-configuration changes.
-- [x] Stable release notes accurately describe changes since the latest stable release.
-- [x] The working tree is clean and the stable preparation commit is pushed to `main`.
-- [x] Stable tag `vX.Y.Z` references the stable-version preparation commit, not the RC commit.
-- [x] Stable tag version matches all project version references.
+- [ ] Final `vX.Y.Z-rc.N` candidate has passed all mandatory validation.
+- [ ] All project version references have been changed from `X.Y.Z-rc.N` to `X.Y.Z`.
+- [ ] The stable-version preparation commit contains no application functionality, dependency, or build-configuration changes.
+- [ ] Stable release notes accurately describe changes since the latest stable release.
+- [ ] The working tree is clean and the stable preparation commit is pushed to `main`.
+- [ ] Stable tag `vX.Y.Z` references the stable-version preparation commit, not the RC commit.
+- [ ] Stable tag version matches all project version references.
 - [ ] Stable Linux and Windows artifacts are built from the exact stable tag commit.
 - [ ] Stable artifacts contain the stable `X.Y.Z` version, without an RC suffix.
 - [ ] GitHub Release is correctly marked as stable, not pre-release.
